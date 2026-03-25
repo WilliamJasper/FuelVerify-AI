@@ -1,0 +1,86 @@
+# --- Python / Backend ---
+backend/venv/
+backend/.venv/
+venv/
+.venv/
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/.pytest_cache/
+backend/.mypy_cache/
+backend/.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+pip-wheel-metadata/
+
+# Backend secrets (keep .env.example)
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Backend temp / debug
+backend/debug_*.txt
+backend/*.log
+
+# --- Node / Frontend ---
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.next/
+frontend/.turbo/
+frontend/.cache/
+frontend/.vite/
+*.tsbuildinfo
+
+# Frontend env (Vite / CRA)
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# --- Root env / secrets ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets*.json
+*.p12
+
+# --- Logs & databases (local only) ---
+*.log
+logs/
+*.sqlite
+*.sqlite3
+*.db
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+
+# --- Editors / IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Test / coverage ---
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# --- Misc ---
+*.bak
+*.tmp
+.cache/
