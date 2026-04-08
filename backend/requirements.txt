@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-dotenv
+pdfplumber
+python-multipart
+pandas
+pytesseract
+Pillow
+PyMuPDF
+numpy
+requests
