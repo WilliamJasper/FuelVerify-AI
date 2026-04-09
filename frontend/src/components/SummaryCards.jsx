@@ -1,6 +1,25 @@
 import React from 'react';
 import { CreditCard, ListOrdered, Wallet } from 'lucide-react';
 
+const CountUp = ({ end, duration = 1000, formatter = (n) => n }) => {
+    const [count, setCount] = React.useState(0);
+
+    React.useEffect(() => {
+        let startTimestamp = null;
+        const step = (timestamp) => {
+            if (!startTimestamp) startTimestamp = timestamp;
+            const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+            setCount(progress * end);
+            if (progress < 1) {
+                window.requestAnimationFrame(step);
+            }
+        };
+        window.requestAnimationFrame(step);
+    }, [end, duration]);
+
+    return <>{formatter(count)}</>;
+};
+
 const formatBaht = (n) => {
     const num = Number(n);
     if (!Number.isFinite(num)) return '—';
@@ -27,7 +46,7 @@ const SummaryCards = ({ result, totalTransactions, totalAmount }) => {
                     </span>
                 </div>
                 <p className="text-3xl font-extrabold text-slate-900 font-display tabular-nums">
-                    {cardCount}
+                    <CountUp end={cardCount} formatter={(n) => Math.floor(n)} />
                 </p>
                 <p className="text-sm text-slate-500 mt-1">บัตรที่อ่านได้</p>
             </div>
@@ -42,7 +61,7 @@ const SummaryCards = ({ result, totalTransactions, totalAmount }) => {
                     </span>
                 </div>
                 <p className="text-3xl font-extrabold text-slate-900 font-display tabular-nums">
-                    {totalTransactions.toLocaleString('th-TH')}
+                    <CountUp end={totalTransactions} formatter={(n) => Math.floor(n).toLocaleString('th-TH')} />
                 </p>
                 <p className="text-sm text-slate-500 mt-1">ธุรกรรมทั้งหมดจากทุกบัตร</p>
             </div>
@@ -57,7 +76,7 @@ const SummaryCards = ({ result, totalTransactions, totalAmount }) => {
                     </span>
                 </div>
                 <p className="text-2xl sm:text-3xl font-extrabold text-slate-900 font-display tabular-nums break-all">
-                    {formatBaht(totalAmount)}
+                    <CountUp end={totalAmount} formatter={formatBaht} />
                 </p>
                 <p className="text-sm text-slate-500 mt-1">ผลรวม balance จากทุกบัตร</p>
             </div>

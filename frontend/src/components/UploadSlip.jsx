@@ -45,7 +45,7 @@ const UploadSlip = ({
     };
 
     const suspiciousPages = useMemo(() => {
-        if (!slipResult?.pages?.length || !result?.data) return [];
+        if (!slipResult?.pages?.length) return [];
 
         const issues = [];
         for (let pageIndex = 0; pageIndex < slipResult.pages.length; pageIndex++) {
@@ -416,7 +416,7 @@ const UploadSlip = ({
             </div>
         )}
 
-        {slipResult?.pages && result && (
+        {slipResult?.pages && (
             <SlipPreview
                 slipResult={slipResult}
                 slipPage={slipPage}

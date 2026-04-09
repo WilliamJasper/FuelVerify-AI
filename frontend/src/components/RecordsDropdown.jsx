@@ -34,10 +34,15 @@ const RecordsDropdown = ({ label = 'KBank Statement OCR', variant = 'dark' }) =>
         return Date.now() - t <= 10 * 60 * 1000;
     };
 
-    const refresh = () => setRecords(listRecords());
+    const refresh = async () => {
+        const data = await listRecords();
+        setRecords(data);
+    };
 
     useEffect(() => {
-        if (open) refresh();
+        if (open) {
+            refresh();
+        }
     }, [open]);
 
     const activeId = useMemo(() => {
@@ -57,18 +62,18 @@ const RecordsDropdown = ({ label = 'KBank Statement OCR', variant = 'dark' }) =>
         return () => document.removeEventListener('click', onDoc);
     }, [open]);
 
-    const rows = useMemo(() => records.slice(0, 20), [records]);
+    const rows = useMemo(() => Array.isArray(records) ? records.slice(0, 20) : [], [records]);
 
     const go = (id) => {
         setOpen(false);
         navigate(`/dashboard/${id}`);
     };
 
-    const del = (e, id) => {
+    const del = async (e, id) => {
         e.preventDefault();
         e.stopPropagation();
         if (!window.confirm('ลบรายการนี้?')) return;
-        deleteRecord(id);
+        await deleteRecord(id);
         setOpen(false);
         navigate('/', { replace: true });
     };

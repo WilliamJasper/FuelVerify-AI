@@ -26,18 +26,24 @@ const Header = ({ result, onReset, recordsDropdown }) => (
         <div className="flex items-center gap-4">
             <div className="text-right border-r border-slate-200 pr-8">
                 <p className="text-slate-600 text-xs font-semibold uppercase tracking-widest mb-1">สถานะระบบ</p>
-                <p className="text-emerald-700 text-sm font-bold flex items-center justify-end gap-2 font-display">
+                <div className="text-emerald-700 text-sm font-bold flex items-center justify-end gap-2 font-display">
                     <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse ring-2 ring-emerald-200"></span>
-                    วิเคราะห์สำเร็จ <span className="text-emerald-800">{result.count}</span> บัตร
-                </p>
+                    {result ? (
+                        <>วิเคราะห์สำเร็จ <span className="text-emerald-800">{result.count || 0}</span> บัตร</>
+                    ) : (
+                        <>ระบบพร้อมใช้งาน</>
+                    )}
+                </div>
             </div>
             {recordsDropdown}
-            <button
-                onClick={onReset}
-                className="p-3 bg-slate-100 hover:bg-blue-50 rounded-xl transition-all border border-slate-200 hover:border-blue-200 group"
-            >
-                <Plus className="w-5 h-5 text-slate-600 group-hover:text-blue-600 group-hover:rotate-90 transition-transform" />
-            </button>
+            {onReset && (
+                <button
+                    onClick={onReset}
+                    className="p-3 bg-slate-100 hover:bg-blue-50 rounded-xl transition-all border border-slate-200 hover:border-blue-200 group"
+                >
+                    <Plus className="w-5 h-5 text-slate-600 group-hover:text-blue-600 group-hover:rotate-90 transition-transform" />
+                </button>
+            )}
         </div>
     </header>
 );

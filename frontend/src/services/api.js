@@ -40,3 +40,22 @@ export const uploadSlip = async (file, taskId, signal) => {
     return response.data;
 };
 
+export const fetchRecords = async () => {
+    const response = await axios.get(`${API_BASE_URL}/api/records`);
+    return response.data;
+};
+
+export const fetchRecordDetail = async (id) => {
+    const response = await axios.get(`${API_BASE_URL}/api/records/${id}`);
+    return response.data;
+};
+
+export const saveRecordToDB = async (record) => {
+    const response = await axios.post(`${API_BASE_URL}/api/records`, record);
+    return response.data;
+};
+
+export const deleteRecordFromDB = async (id) => {
+    const response = await axios.delete(`${API_BASE_URL}/api/records/${id}`);
+    return response.data;
+};

@@ -85,7 +85,7 @@ export function matchSlipToStatement(currentPage, result) {
   // Fallback: ถ้าจับคู่แบบ strict ไม่เจอ แต่ "คำร้าน/สาขา + วันที่ + ยอด" ตรงกัน
   // ให้ลองแม้ last4 ไม่ตรง (ช่วยกรณี OCR last4 เพี้ยนจากรูปเอียง)
   if (!matchedTxn && merchantKeywords.length > 0 && slipDate && slipAmount) {
-    for (const card of result.data || []) {
+    for (const card of result?.data || []) {
       for (let tIdx = 0; tIdx < (card.transactions || []).length; tIdx++) {
         const txn = card.transactions[tIdx];
         if (txn.type === 'ชำระเงิน') continue;
@@ -112,7 +112,7 @@ export function matchSlipToStatement(currentPage, result) {
   // จับคู่ด้วย date + merchant (+last4 ถ้ามี) เฉพาะกรณีที่เจอ candidate เดียวเท่านั้น
   if (!matchedTxn && merchantKeywords.length > 0 && slipDate && !slipAmount) {
     const candidates = [];
-    for (const card of result.data || []) {
+    for (const card of result?.data || []) {
       const cardLast4 = (card.card_no || '').replace(/\D/g, '').slice(-4);
       const isLast4Match = last4ForMatch ? cardLast4 === last4ForMatch : true;
       if (!isLast4Match) continue;

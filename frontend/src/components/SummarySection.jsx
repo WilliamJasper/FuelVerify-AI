@@ -44,13 +44,15 @@ export default function SummarySection({ result, slipResult }) {
   const [openMatchedByCard, setOpenMatchedByCard] = useState(true);
   const [openMissingByCard, setOpenMissingByCard] = useState(true);
   const summary = useMemo(
-    () => buildCoverageSummary(result, slipResult),
+    () => {
+      if (!result) return { matched: [], unmatched: [], matchedCount: 0, unmatchedCount: 0, totalTxns: 0 };
+      return buildCoverageSummary(result, slipResult);
+    },
     [result, slipResult],
   );
 
-  if (!result) return null;
-
   const filteredUnmatched = useMemo(() => {
+    if (!result) return [];
     const baseSorted = [...summary.unmatched].sort((a, b) => {
       const aVip = vipNumberFromLabel(cardLabel(a.card));
       const bVip = vipNumberFromLabel(cardLabel(b.card));
@@ -304,30 +306,59 @@ export default function SummarySection({ result, slipResult }) {
       </div>
 
       <div className={`transition-all duration-300 ${open ? 'opacity-100 max-h-[20000px]' : 'opacity-0 max-h-0 overflow-hidden pointer-events-none'}`}>
-      <div className="grid md:grid-cols-2 gap-4 mb-6">
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600">
-            <CheckCircle2 className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-sm text-slate-500">จับคู่สำเร็จ</div>
-            <div className="text-2xl font-extrabold text-slate-800">
-              {summary.matchedCount}/{summary.totalTxns}
+      {!result ? (
+        <div className="py-16 text-center">
+            {slipResult?.pages?.length > 0 ? (
+                <div className="max-w-md mx-auto">
+                    <div className="bg-amber-50 border border-amber-200 rounded-3xl p-8 mb-4">
+                        <div className="w-16 h-16 rounded-full bg-amber-100 flex items-center justify-center mx-auto mb-4 text-amber-600">
+                            <Receipt size={32} />
+                        </div>
+                        <h4 className="text-2xl font-black text-slate-900 mb-2">
+                            พบสลิป {slipResult.pages.length} ใบ
+                        </h4>
+                        <p className="text-slate-600 text-sm">
+                            อัปโหลดสลิปเรียบร้อยแล้ว กรุณาอัปโหลดใบแจ้งยอดเพื่อเริ่มการแมตช์ข้อมูลและตรวจสอบความถูกต้อง
+                        </p>
+                    </div>
+                </div>
+            ) : (
+                <>
+                    <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center mx-auto mb-4 text-slate-300">
+                        <AlertTriangle size={32} />
+                    </div>
+                    <p className="text-slate-500 font-medium italic">ยังไม่พบข้อมูลสรุป กรุณาอัปโหลดใบแจ้งยอด</p>
+                </>
+            )}
+        </div>
+      ) : (
+        <>
+          <div className="grid md:grid-cols-2 gap-4 mb-6">
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600">
+                <CheckCircle2 className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-sm text-slate-500">จับคู่สำเร็จ</div>
+                <div className="text-2xl font-extrabold text-slate-800">
+                  {summary.matchedCount}/{summary.totalTxns}
+                </div>
+              </div>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-amber-50 text-amber-600">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="text-sm text-slate-500">ยังไม่ครบ</div>
+                <div className="text-2xl font-extrabold text-slate-800">
+                  {summary.unmatchedCount}
+                </div>
+              </div>
             </div>
           </div>
-        </div>
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm flex items-center gap-3">
-          <div className="p-2 rounded-lg bg-amber-50 text-amber-600">
-            <AlertTriangle className="w-5 h-5" />
-          </div>
-          <div>
-            <div className="text-sm text-slate-500">ยังไม่ครบ</div>
-            <div className="text-2xl font-extrabold text-slate-800">
-              {summary.unmatchedCount}
-            </div>
-          </div>
-        </div>
-      </div>
+        </>
+      )}
 
       {missingByCard.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm mb-6">

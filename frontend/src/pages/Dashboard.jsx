@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { FileText } from 'lucide-react';
+import { FileText, Plus, ArrowUp } from 'lucide-react';
 import { getSlipProgress, uploadSlip } from '../services/api.js';
 import { matchSlipToStatement } from '../utils/slipPreviewMatch.js';
 import { autoCorrectSlipPages } from '../utils/slipAutoCorrect.js';
@@ -18,13 +18,12 @@ import UploadSlip from '../components/UploadSlip.jsx';
 import CardList from '../components/CardList.jsx';
 import RecordsDropdown from '../components/RecordsDropdown.jsx';
 import SummarySection from '../components/SummarySection.jsx';
-import { ArrowUp } from 'lucide-react';
 
 const Dashboard = () => {
     const navigate = useNavigate();
     const { id } = useParams();
     const topRef = useRef(null);
-    const [record, setRecord] = useState(() => (id ? getRecord(id) : null));
+    const [record, setRecord] = useState(null);
     const result = record?.result || null;
 
     const [slipFiles, setSlipFiles] = useState([]);
@@ -42,39 +41,50 @@ const Dashboard = () => {
     const slipProgressIntervalRef = useRef(null);
     const slipUploadStartRef = useRef(null);
     const [isSlipDragActive, setIsSlipDragActive] = useState(false);
+    const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
-        const next = id ? getRecord(id) : null;
-        setRecord(next);
-        if (!next) {
-            navigate('/', { replace: true });
-            return;
-        }
-        setSlipResult(next.slipResult ?? null);
-        setSlipPage(0);
-        setSlipError(null);
-        setDedupeWarnings([]);
-        setUploadMatchedCards([]);
-        setSlipFiles([]);
+        const loadData = async () => {
+            if (!id) return;
+            setIsLoading(true);
+            try {
+                const full = await getRecordWithSlipImages(id);
+                if (!full) {
+                    navigate('/', { replace: true });
+                    return;
+                }
+                
+                // Reset states for new record
+                setSlipPage(0);
+                setSlipError(null);
+                setDedupeWarnings([]);
+                setUploadMatchedCards([]);
+                setSlipFiles([]);
 
-        getRecordWithSlipImages(id).then((full) => {
-            if (full?.slipResult?.pages?.length) {
-                const pages = full.slipResult.pages;
-                const deduped = dedupeSlipPages(pages);
-                if (deduped.length < pages.length) {
-                    const newSlipResult = { ...full.slipResult, pages: deduped, total_pages: deduped.length };
-                    const updated = replaceRecordSlipResult(full.id, newSlipResult);
-                    setRecord(updated || full);
-                    setSlipResult(newSlipResult);
+                if (full?.slipResult?.pages?.length) {
+                    const pages = full.slipResult.pages;
+                    const deduped = dedupeSlipPages(pages);
+                    if (deduped.length < pages.length) {
+                        const newSlipResult = { ...full.slipResult, pages: deduped, total_pages: deduped.length };
+                        const updated = await replaceRecordSlipResult(full.id, newSlipResult);
+                        setRecord(updated || full);
+                        setSlipResult(newSlipResult);
+                    } else {
+                        setRecord(full);
+                        setSlipResult(full.slipResult);
+                    }
                 } else {
                     setRecord(full);
-                    setSlipResult(full.slipResult);
+                    setSlipResult(null);
                 }
-            } else if (full) {
-                setRecord(full);
-                setSlipResult(full.slipResult ?? null);
+            } catch (err) {
+                console.error('Failed to load record:', err);
+                navigate('/', { replace: true });
+            } finally {
+                setIsLoading(false);
             }
-        });
+        };
+        loadData();
     }, [id, navigate]);
 
     const handleSlipFileChange = (e) => {
@@ -240,15 +250,15 @@ const Dashboard = () => {
             let updatedRecord = record ? { ...record, slipResult: merged } : record;
             if (record) {
                 try {
-                    const updated = setRecordSlipResult(
+                    const updated = await setRecordSlipResult(
                         record.id,
                         merged,
                         slipLabel,
                         newPagesCount,
                     );
                     if (updated) updatedRecord = updated;
-                } catch (_) {
-                    /* quota etc.: keep in-memory merged only */
+                } catch (err) {
+                    console.error('Failed to sync slip result to SQLite:', err);
                 }
             }
 
@@ -332,32 +342,32 @@ const Dashboard = () => {
         navigate('/');
     };
 
-    const removeSlipPage = (pageIndex) => {
+    const removeSlipPage = async (pageIndex) => {
         if (!record || !slipResult?.pages?.length) return;
         const pages = slipResult.pages.filter((_, i) => i !== pageIndex);
         if (pages.length === 0) {
-            const updated = replaceRecordSlipResult(record.id, null);
+            const updated = await replaceRecordSlipResult(record.id, null);
             setRecord(updated || record);
             setSlipResult(null);
             setSlipPage(0);
             return;
         }
         const newSlipResult = { ...slipResult, pages, total_pages: pages.length };
-        const updated = replaceRecordSlipResult(record.id, newSlipResult);
+        const updated = await replaceRecordSlipResult(record.id, newSlipResult);
         setRecord(updated || record);
         setSlipResult(newSlipResult);
         setSlipPage(Math.min(slipPage, pages.length - 1));
     };
 
-    const removeAllSlipPages = () => {
+    const removeAllSlipPages = async () => {
         if (!record || !slipResult?.pages?.length) return;
-        const updated = replaceRecordSlipResult(record.id, null);
+        const updated = await replaceRecordSlipResult(record.id, null);
         setRecord(updated || record);
         setSlipResult(null);
         setSlipPage(0);
     };
 
-    const handleManualSlipEdit = (pageIndex, editedValues) => {
+    const handleManualSlipEdit = async (pageIndex, editedValues) => {
         if (!record || !slipResult?.pages?.length) return;
         const pages = slipResult.pages.map((p, idx) => {
             if (idx !== pageIndex) return p;
@@ -378,12 +388,10 @@ const Dashboard = () => {
             };
         });
         const newSlipResult = { ...slipResult, pages, total_pages: pages.length };
-        const updated = replaceRecordSlipResult(record.id, newSlipResult);
+        const updated = await replaceRecordSlipResult(record.id, newSlipResult);
         setRecord(updated || record);
         setSlipResult(newSlipResult);
     };
-
-    if (!result) return null;
 
     const totalAmount =
         result?.data?.reduce((acc, curr) => {
@@ -398,7 +406,7 @@ const Dashboard = () => {
         <div className="min-h-screen bg-[#F8FAFC] text-slate-900 font-sans pb-20 selection:bg-blue-100">
             <Header
                 result={result}
-                onReset={reset}
+                onReset={() => navigate('/')}
                 recordsDropdown={<RecordsDropdown label="รายการ" variant="light" />}
             />
 
@@ -407,6 +415,7 @@ const Dashboard = () => {
                 className="max-w-[1400px] mx-auto px-12 py-12 page-transition"
             >
                 <div ref={topRef} />
+
                 <SummaryCards
                     result={result}
                     totalTransactions={totalTransactions}

@@ -244,13 +244,32 @@ const CardList = ({ result, slipResult }) => {
             </div>
 
             <div className={`transition-all duration-300 ${open ? 'opacity-100 max-h-[20000px]' : 'opacity-0 max-h-0 overflow-hidden pointer-events-none'}`}>
-            {filteredCards.length === 0 && (
+            {!result && (!slipResult?.pages || slipResult.pages.length === 0) && (
+                <div className="px-4 py-16 text-center">
+                    <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center mx-auto mb-4 text-slate-300">
+                        <CreditCard size={32} />
+                    </div>
+                    <p className="text-slate-500 font-medium italic">ยังไม่พบข้อมูลแยกตามลำดับบัตร กรุณาอัปโหลดใบแจ้งยอด</p>
+                </div>
+            )}
+
+            {!result && slipResult?.pages?.length > 0 && (
+                <div className="px-4 py-16 text-center">
+                    <div className="w-16 h-16 rounded-full bg-amber-50 flex items-center justify-center mx-auto mb-4 text-amber-400">
+                        <CreditCard size={32} />
+                    </div>
+                    <p className="text-amber-800 text-lg font-bold mb-2">พบสลิปอัปโหลดแล้ว {slipResult.pages.length} ใบ</p>
+                    <p className="text-slate-500 font-medium">กรุณาอัพโหลดใบแจ้งยอดเพื่อทำการ Matching และตรวจสอบความถูกต้อง</p>
+                </div>
+            )}
+
+            {result && filteredCards.length === 0 && (
                 <div className="px-4 py-10 text-center text-slate-600 text-base italic">
                     ไม่พบบัตรที่ตรงกับคำค้นหา
                 </div>
             )}
 
-            {filteredCards.map((item, idx) => {
+            {result && filteredCards.map((item, idx) => {
                 if (idx === 0) usedSlipIndicesRef.current.clear();
                 const txnMatchStatus = computeTxnMatchStatus(
                     item,

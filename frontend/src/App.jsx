@@ -1,5 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import RecordsListPage from './pages/RecordsListPage.jsx';
 import UploadStatementPage from './pages/UploadStatementPage.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 
@@ -9,7 +10,8 @@ const basename =
 const App = () => (
     <BrowserRouter basename={basename}>
         <Routes>
-            <Route path="/" element={<UploadStatementPage />} />
+            <Route path="/" element={<RecordsListPage />} />
+            <Route path="/upload/:id" element={<UploadStatementPage />} />
             <Route path="/dashboard/:id" element={<Dashboard />} />
         </Routes>
     </BrowserRouter>

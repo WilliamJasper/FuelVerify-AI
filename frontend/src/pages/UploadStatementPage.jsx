@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { uploadStatement } from '../services/api.js';
-import { createRecordFromStatement } from '../utils/records.js';
+import { updateRecordStatement } from '../utils/records.js';
 import LoadingOverlay from '../components/LoadingOverlay.jsx';
 import UploadStatement from '../components/UploadStatement.jsx';
 import UploadStatementHeader from '../components/UploadStatementHeader.jsx';
@@ -13,33 +13,34 @@ const runFakeProgress = (
 ) => {
     setLoadingStep(1);
     return (async () => {
-        for (let i = 1; i <= 50; i++) {
+        for (let i = 1; i <= 20; i++) {
             if (isCancelledRef.current) return;
             await new Promise((r) => setTimeout(r, 100));
             if (isCancelledRef.current) return;
-            setLoadingProgress(Math.floor((i / 50) * 33));
+            setLoadingProgress(Math.floor((i / 20) * 33));
         }
         if (isCancelledRef.current) return;
         setLoadingStep(2);
-        for (let i = 1; i <= 30; i++) {
+        for (let i = 1; i <= 20; i++) {
             if (isCancelledRef.current) return;
             await new Promise((r) => setTimeout(r, 100));
             if (isCancelledRef.current) return;
-            setLoadingProgress(Math.floor(33 + (i / 30) * 33));
+            setLoadingProgress(Math.floor(33 + (i / 20) * 33));
         }
         if (isCancelledRef.current) return;
         setLoadingStep(3);
-        for (let i = 1; i <= 40; i++) {
+        for (let i = 1; i <= 20; i++) {
             if (isCancelledRef.current) return;
             await new Promise((r) => setTimeout(r, 100));
             if (isCancelledRef.current) return;
-            setLoadingProgress(Math.floor(66 + (i / 40) * 33));
+            setLoadingProgress(Math.floor(66 + (i / 20) * 33));
         }
     })();
 };
 
 const UploadStatementPage = () => {
     const navigate = useNavigate();
+    const { id } = useParams();
     const [file, setFile] = useState(null);
     const [loading, setLoading] = useState(false);
     const [loadingProgress, setLoadingProgress] = useState(0);
@@ -59,7 +60,7 @@ const UploadStatementPage = () => {
     };
 
     const handleUpload = async () => {
-        if (!file) return;
+        if (!file || !id) return;
         setLoading(true);
         setLoadingProgress(0);
         setLoadingStep(1);
@@ -81,12 +82,16 @@ const UploadStatementPage = () => {
             const [response] = await Promise.all([apiCall, runProgress]);
 
             if (isCancelledRef.current) return;
+            
+            // รอให้บันทึกลง SQLite ก่อน
+            await updateRecordStatement(id, response.data);
+            
             setLoadingProgress(100);
             setLoadingStep(4);
+            
             navigateTimeoutRef.current = setTimeout(() => {
                 setLoading(false);
-                const record = createRecordFromStatement(response.data);
-                navigate(`/dashboard/${record.id}`);
+                navigate(`/dashboard/${id}`);
             }, 1000);
         } catch (err) {
             if (!isCancelledRef.current) {

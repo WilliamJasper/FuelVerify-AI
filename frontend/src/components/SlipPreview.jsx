@@ -155,6 +155,12 @@ const SlipPreview = ({ slipResult, slipPage, setSlipPage, result, onRemovePage, 
                                 <input
                                     value={draft.merchant}
                                     onChange={(e) => setDraft((d) => ({ ...d, merchant: e.target.value }))}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            onManualEdit?.(slipPage, draft);
+                                            setIsEditing(false);
+                                        }
+                                    }}
                                     className="w-[65%] px-3 py-2 rounded-lg border border-slate-300 text-right font-bold"
                                 />
                             ) : (
@@ -170,6 +176,12 @@ const SlipPreview = ({ slipResult, slipPage, setSlipPage, result, onRemovePage, 
                                 <input
                                     value={draft.date}
                                     onChange={(e) => setDraft((d) => ({ ...d, date: e.target.value }))}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            onManualEdit?.(slipPage, draft);
+                                            setIsEditing(false);
+                                        }
+                                    }}
                                     placeholder="dd/mm/yy"
                                     className="w-[45%] px-3 py-2 rounded-lg border border-slate-300 text-right font-bold"
                                 />
@@ -186,6 +198,12 @@ const SlipPreview = ({ slipResult, slipPage, setSlipPage, result, onRemovePage, 
                                 <input
                                     value={draft.time}
                                     onChange={(e) => setDraft((d) => ({ ...d, time: e.target.value }))}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            onManualEdit?.(slipPage, draft);
+                                            setIsEditing(false);
+                                        }
+                                    }}
                                     placeholder="HH:MM:SS"
                                     className="w-[40%] px-3 py-2 rounded-lg border border-slate-300 text-right font-bold"
                                 />
@@ -206,6 +224,12 @@ const SlipPreview = ({ slipResult, slipPage, setSlipPage, result, onRemovePage, 
                                             last4: (e.target.value || '').replace(/\D/g, '').slice(0, 4),
                                         }))
                                     }
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            onManualEdit?.(slipPage, draft);
+                                            setIsEditing(false);
+                                        }
+                                    }}
                                     className="w-[35%] px-3 py-2 rounded-lg border border-slate-300 text-right font-bold"
                                 />
                             ) : (
@@ -229,6 +253,12 @@ const SlipPreview = ({ slipResult, slipPage, setSlipPage, result, onRemovePage, 
                                 <input
                                     value={draft.amount}
                                     onChange={(e) => setDraft((d) => ({ ...d, amount: e.target.value }))}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            onManualEdit?.(slipPage, draft);
+                                            setIsEditing(false);
+                                        }
+                                    }}
                                     placeholder="เช่น 500.00"
                                     className="w-[45%] px-3 py-2 rounded-lg border border-slate-300 text-right font-bold"
                                 />

@@ -26,6 +26,7 @@ export default defineConfig(({ mode }) => {
         '/upload': { target: 'http://127.0.0.1:5004', changeOrigin: true },
         '/upload-slip': { target: 'http://127.0.0.1:5004', changeOrigin: true },
         '/upload-slip-progress': { target: 'http://127.0.0.1:5004', changeOrigin: true },
+        '/api': { target: 'http://127.0.0.1:5004', changeOrigin: true },
       },
     },
   }

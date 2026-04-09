@@ -4,6 +4,8 @@ import pdfplumber
 import io
 import re
 import base64
+import json
+import sqlite3
 
 from PIL import Image, ImageOps
 import pytesseract
@@ -71,6 +73,22 @@ ILOVEPDF_SECRET_KEY = (os.environ.get("ILOVEPDF_SECRET_KEY") or "").strip()
 ILOVEPDF_REGION = (os.environ.get("ILOVEPDF_REGION") or "eu").strip().lower()
 ILOVEPDF_TIMEOUT_SEC = max(15, int(os.environ.get("ILOVEPDF_TIMEOUT_SEC", "120")))
 app = FastAPI()
+
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fuelverify.db")
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    # ตารางเก็บข้อมูล Record หลัก (Metadata + Statement Results)
+    c.execute('''CREATE TABLE IF NOT EXISTS records
+                 (id TEXT PRIMARY KEY, name TEXT, date TEXT, type TEXT, data TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    # ตารางเก็บรูปภาพและผล OCR แบบละเอียด (แทน IndexedDB)
+    c.execute('''CREATE TABLE IF NOT EXISTS slip_blobs
+                 (id TEXT PRIMARY KEY, data TEXT)''')
+    conn.commit()
+    conn.close()
+
+init_db()
 
 # Enable CORS for React frontend
 app.add_middleware(
@@ -640,7 +658,7 @@ def _parse_slip_text(ocr_text: str) -> dict:
         # AVAILABLE BALANCE 5,070.00
         # ให้ดึงบรรทัดถัดจาก TOTAL เป็นยอดซื้อ
         split_total_match = re.search(
-            r'TOTAL\s*:?\s*THB[\s\S]{0,40}?CUSTOMER\s+COPY[\s\S]{0,20}?\n\s*([\d,]+\.\d{2})\s*\n\s*AVAILABLE\s+BALANCE\s+([\d,]+\.\d{2})',
+            r'TOTAL\s*:?\s*THB[\s\S]{0,60}?CUSTOMER\s+COPY[\s\S]{0,40}?\n\s*([\d,]+\.\d{2})\s*\n\s*AVAILABLE\s+BALANCE\s+([\d,]+\.\d{2})',
             text_norm,
             re.IGNORECASE,
         )
@@ -743,8 +761,8 @@ def _amount_has_total_evidence(raw_text: str, amount: str) -> bool:
         return False
     text = str(raw_text)
     amt = re.escape(str(amount))
-    # เข้มงวด: ต้องอยู่ "บรรทัด TOTAL" เดียวกันเท่านั้น (กันอ่าน AVAILABLE BALANCE ผิด)
-    if re.search(rf"TOTAL\s*:?\s*THB[^\n]{{0,36}}{amt}", text, re.IGNORECASE):
+    # ให้ยืดหยุ่นขึ้น: ยอมรับแม้จะอยู่คนละบรรทัด หรือมีข้อความ CUSTOMER COPY คั่น (ระยะไม่เกิน 60-80 ตัวอักษร)
+    if re.search(rf"TOTAL\s*:?\s*THB[\s\S]{0,80}?{amt}", text, re.IGNORECASE):
         return True
     return False
 
@@ -1757,4 +1775,89 @@ if __name__ == "__main__":
 
     _port = int(os.environ.get("PORT", "5004"))
     _host = os.environ.get("HOST", "127.0.0.1")
+
+    # API สำหรับจัดการข้อมูลถาวร (SQLite)
+    @app.get("/api/records")
+    def get_records():
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute("SELECT id, name, date, type, data, created_at FROM records ORDER BY created_at DESC")
+        rows = c.fetchall()
+        
+        results = []
+        for r in rows:
+            record_data = json.loads(r["data"])
+            # รวม metadata พื้นฐาน
+            results.append({
+                **record_data,
+                "created_at": r["created_at"]
+            })
+        conn.close()
+        return results
+
+    @app.get("/api/records/{id}")
+    def get_record_detail(id: str):
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        
+        # ดึง Metadata
+        c.execute("SELECT data FROM records WHERE id = ?", (id,))
+        r = c.fetchone()
+        if not r:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Record not found")
+        
+        record = json.loads(r["data"])
+        
+        # ดึงรูปสลิปและผล OCR เต็ม
+        c.execute("SELECT data FROM slip_blobs WHERE id = ?", (id,))
+        sb = c.fetchone()
+        if sb:
+            record["slipResult"] = json.loads(sb["data"])
+            
+        conn.close()
+        return record
+
+    @app.post("/api/records")
+    async def save_record(record: dict):
+        record_id = record.get("id")
+        if not record_id:
+            raise HTTPException(status_code=400, detail="Missing record id")
+        
+        # แยก slipResult ออกไปเก็บใน blobs เพื่อไม่ให้ไฟล์ข้อมูลหลักใหญ่เกินไป
+        full_slip_result = record.pop("slipResult", None)
+        
+        name = record.get("name", "รายการใหม่")
+        date = record.get("date", "")
+        type_ = record.get("type", "manual")
+        data_json = json.dumps(record)
+        
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        # Save Metadata
+        c.execute("INSERT OR REPLACE INTO records (id, name, date, type, data) VALUES (?, ?, ?, ?, ?)",
+                  (record_id, name, date, type_, data_json))
+        
+        # Save Slip Blobs (ถ้ามี)
+        if full_slip_result:
+            c.execute("INSERT OR REPLACE INTO slip_blobs (id, data) VALUES (?, ?)",
+                      (record_id, json.dumps(full_slip_result)))
+        
+        conn.commit()
+        conn.close()
+        return {"status": "success", "id": record_id}
+
+    @app.delete("/api/records/{id}")
+    def delete_record(id: str):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM records WHERE id = ?", (id,))
+        c.execute("DELETE FROM slip_blobs WHERE id = ?", (id,))
+        conn.commit()
+        conn.close()
+        return {"status": "deleted"}
+
     uvicorn.run(app, host=_host, port=_port)
