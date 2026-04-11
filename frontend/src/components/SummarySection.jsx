@@ -4,7 +4,10 @@ import { buildCoverageSummary } from '../utils/matching.js';
 import * as XLSX from 'xlsx-js-style';
 import { saveAs } from 'file-saver';
 
-function cardLabel(card) {
+function cardLabel(card, bank = 'kbank') {
+  if (bank === 'bbl') {
+    return card?.card_no || card?.account_name || '—';
+  }
   return (
     card?.account_name ||
     card?.accountName ||
@@ -38,7 +41,7 @@ function vipNumberFromLabel(label) {
   return m ? parseInt(m[0], 10) : Number.POSITIVE_INFINITY;
 }
 
-export default function SummarySection({ result, slipResult }) {
+export default function SummarySection({ result, slipResult, bank = 'kbank' }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(true);
   const [openMatchedByCard, setOpenMatchedByCard] = useState(true);
@@ -54,15 +57,15 @@ export default function SummarySection({ result, slipResult }) {
   const filteredUnmatched = useMemo(() => {
     if (!result) return [];
     const baseSorted = [...summary.unmatched].sort((a, b) => {
-      const aVip = vipNumberFromLabel(cardLabel(a.card));
-      const bVip = vipNumberFromLabel(cardLabel(b.card));
+      const aVip = vipNumberFromLabel(cardLabel(a.card, bank));
+      const bVip = vipNumberFromLabel(cardLabel(b.card, bank));
       if (aVip !== bVip) return aVip - bVip;
       return String(a.txn?.date || '').localeCompare(String(b.txn?.date || ''));
     });
     const q = query.trim().toLowerCase();
     if (!q) return baseSorted;
     return baseSorted.filter(({ txn, card }) => {
-      const cardName = cardLabel(card).toLowerCase();
+      const cardName = cardLabel(card, bank).toLowerCase();
       const date = (txn?.date || '').toString().toLowerCase();
       const desc = (txn?.desc || '').toString().toLowerCase();
       const branch = extractBranch(txn?.desc).toLowerCase();
@@ -78,7 +81,7 @@ export default function SummarySection({ result, slipResult }) {
   const missingByCard = useMemo(() => {
     const counts = new Map();
     for (const { card } of summary.unmatched) {
-      const label = cardLabel(card);
+      const label = cardLabel(card, bank);
       counts.set(label, (counts.get(label) || 0) + 1);
     }
     const rows = Array.from(counts.entries()).map(([label, count]) => ({
@@ -93,7 +96,7 @@ export default function SummarySection({ result, slipResult }) {
   const matchedByCard = useMemo(() => {
     const counts = new Map();
     for (const { card } of summary.matched) {
-      const label = cardLabel(card);
+      const label = cardLabel(card, bank);
       counts.set(label, (counts.get(label) || 0) + 1);
     }
     const rows = Array.from(counts.entries()).map(([label, count]) => ({
@@ -115,7 +118,7 @@ export default function SummarySection({ result, slipResult }) {
   const focusFirstMatchedTxn = (label) => {
     const vip = vipNumberFromLabel(label);
     const key = String(label || '').toLowerCase();
-    const entry = summary.matched.find(({ card }) => String(cardLabel(card) || '').toLowerCase() === key);
+    const entry = summary.matched.find(({ card }) => String(cardLabel(card, bank) || '').toLowerCase() === key);
     if (!entry?.card || !entry?.txn) return focusCard(label);
 
     const txns = Array.isArray(entry.card.transactions) ? entry.card.transactions : [];
@@ -136,10 +139,10 @@ export default function SummarySection({ result, slipResult }) {
   };
 
   const exportUnmatchedExcel = () => {
-    const header = ['ลำดับ', 'ชื่อบัตร', 'วันที่', 'รายการ', 'สาขา'];
+    const header = ['ลำดับ', bank === 'bbl' ? 'หมายเลขบัตร' : 'ชื่อบัตร', 'วันที่', 'รายการ', 'สาขา'];
     const rows = filteredUnmatched.map(({ txn, card }, idx) => ([
       idx + 1,
-      cardLabel(card),
+      cardLabel(card, bank),
       txn?.date || '—',
       stripBranchFromDesc(txn?.desc),
       extractBranch(txn?.desc),
@@ -210,7 +213,7 @@ export default function SummarySection({ result, slipResult }) {
     // สรุปตามบัตรแบบตาราง (5 คอลัมน์) — แถวบนเป็นชื่อบัตร, แถวล่างเป็น "ขาด n"
     const counts = new Map();
     for (const { card } of filteredUnmatched) {
-      const label = cardLabel(card);
+      const label = cardLabel(card, bank);
       counts.set(label, (counts.get(label) || 0) + 1);
     }
     const cards = Array.from(counts.entries())
@@ -496,7 +499,7 @@ export default function SummarySection({ result, slipResult }) {
             <table className="w-full text-left">
               <thead>
                 <tr className="text-sm text-slate-600 border-b border-slate-200">
-                  <th className="py-2 pr-4">ชื่อบัตร</th>
+                  <th className="py-2 pr-4">{bank === 'bbl' ? 'หมายเลขบัตร' : 'ชื่อบัตร'}</th>
                   <th className="py-2 pr-4">วันที่</th>
                   <th className="py-2 pr-4">รายการ</th>
                   <th className="py-2 pr-4">สาขา</th>
@@ -506,7 +509,7 @@ export default function SummarySection({ result, slipResult }) {
                 {filteredUnmatched.map(({ txn, card }, idx) => (
                   <tr key={idx} className="border-b border-slate-100">
                     <td className="py-2 pr-4 font-medium text-slate-800">
-                      {cardLabel(card)}
+                      {cardLabel(card, bank)}
                     </td>
                     <td className="py-2 pr-4">{txn.date || '—'}</td>
                     <td className="py-2 pr-4">{stripBranchFromDesc(txn.desc)}</td>

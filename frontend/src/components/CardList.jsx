@@ -85,7 +85,7 @@ function scrollCardHeaderIntoView(card, anchorIdFor) {
     });
 }
 
-const CardList = ({ result, slipResult }) => {
+const CardList = ({ result, slipResult, bank = 'kbank' }) => {
     const [expandedCards, setExpandedCards] = useState(() => new Set());
     const [searchQuery, setSearchQuery] = useState('');
     const [open, setOpen] = useState(true);
@@ -298,10 +298,10 @@ const CardList = ({ result, slipResult }) => {
                                 </div>
                                 <div>
                                     <h4 className="text-2xl font-black text-slate-900 uppercase tracking-tight mb-1 group-hover:text-blue-600 transition-colors">
-                                        {item.account_name}
+                                        {bank === 'bbl' ? item.card_no : item.account_name}
                                     </h4>
                                     <p className="text-slate-600 font-mono text-sm tracking-widest">
-                                        {item.card_no}
+                                        {bank === 'bbl' ? item.account_name : item.card_no}
                                     </p>
                                 </div>
                             </div>
@@ -317,7 +317,7 @@ const CardList = ({ result, slipResult }) => {
                                 </div>
                                 <div className="text-right min-w-[180px]">
                                     <p className="text-slate-600 text-xs font-bold uppercase tracking-widest mb-1">
-                                        ยอดคงค้าง
+                                        {bank === 'bbl' ? 'ยอดเงินรวมทั้งสิ้น (Total Amount)' : 'ยอดคงค้าง'}
                                     </p>
                                     <p className="text-3xl font-black text-emerald-700">
                                         ฿{item.balance}
@@ -344,6 +344,7 @@ const CardList = ({ result, slipResult }) => {
                                 card={item}
                                 txnMatchStatus={txnMatchStatus}
                                 slipResult={slipResult}
+                                bank={bank}
                             />
                         </div>
                     </div>

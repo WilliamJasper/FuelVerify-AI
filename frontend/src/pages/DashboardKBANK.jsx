@@ -19,7 +19,7 @@ import CardList from '../components/CardList.jsx';
 import RecordsDropdown from '../components/RecordsDropdown.jsx';
 import SummarySection from '../components/SummarySection.jsx';
 
-const Dashboard = () => {
+const DashboardKBANK = () => {
     const navigate = useNavigate();
     const { id } = useParams();
     const topRef = useRef(null);
@@ -408,6 +408,7 @@ const Dashboard = () => {
                 result={result}
                 onReset={() => navigate('/')}
                 recordsDropdown={<RecordsDropdown label="รายการ" variant="light" />}
+                bank="kbank"
             />
 
             <main
@@ -458,7 +459,7 @@ const Dashboard = () => {
             <button
                 type="button"
                 onClick={() => topRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                className="fixed bottom-8 right-8 z-40 w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 active:scale-95 transition-transform flex items-center justify-center"
+                className="fixed bottom-8 right-8 z-40 w-12 h-12 rounded-full bg-emerald-600 text-white shadow-lg hover:bg-emerald-700 active:scale-95 transition-transform flex items-center justify-center"
                 title="กลับขึ้นด้านบน"
             >
                 <ArrowUp className="w-6 h-6" />
@@ -467,4 +468,4 @@ const Dashboard = () => {
     );
 };
 
-export default Dashboard;
+export default DashboardKBANK;

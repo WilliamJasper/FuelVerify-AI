@@ -5,7 +5,11 @@ const API_BASE_URL = raw.replace(/\/$/, '');
 
 export const uploadStatement = async (file, signal) => {
     const formData = new FormData();
-    formData.append('file', file);
+    if (Array.isArray(file)) {
+        file.forEach((f) => formData.append('files', f));
+    } else {
+        formData.append('files', file); // Backend expects 'files' list
+    }
 
     const response = await axios.post(`${API_BASE_URL}/upload`, formData, {
         headers: {

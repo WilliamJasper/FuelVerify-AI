@@ -47,7 +47,8 @@ const RecordsDropdown = ({ label = 'KBank Statement OCR', variant = 'dark' }) =>
 
     const activeId = useMemo(() => {
         const path = location?.pathname || '';
-        const m = path.match(/^\/dashboard\/([^\/?#]+)/);
+        // Path format is /dashboard/:bank/:id
+        const m = path.match(/^\/dashboard\/[^/]+\/([^/?#]+)/);
         return m ? m[1] : null;
     }, [location?.pathname]);
 
@@ -64,18 +65,38 @@ const RecordsDropdown = ({ label = 'KBank Statement OCR', variant = 'dark' }) =>
 
     const rows = useMemo(() => Array.isArray(records) ? records.slice(0, 20) : [], [records]);
 
-    const go = (id) => {
+    const go = (record) => {
         setOpen(false);
-        navigate(`/dashboard/${id}`);
+        const bank = record.filename?.startsWith('BBL') ? 'bbl' : 'kbank';
+        navigate(`/dashboard/${bank}/${record.id}`);
     };
 
-    const del = async (e, id) => {
-        e.preventDefault();
-        e.stopPropagation();
-        if (!window.confirm('ลบรายการนี้?')) return;
-        await deleteRecord(id);
-        setOpen(false);
-        navigate('/', { replace: true });
+    const del = async (e, recordId) => {
+        // Prevent event bubbling to the row's 'go' function
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        if (!recordId) return;
+        if (!window.confirm('คุณแน่ใจหรือไม่ว่าต้องการซ่อนรายการนี้ออกจากรายการ?')) return;
+
+        try {
+            await deleteRecord(recordId);
+            setOpen(false);
+            
+            // If we are currently on the dashboard of the record we just deleted, 
+            // we MUST navigate away.
+            if (activeId === String(recordId)) {
+                navigate('/', { replace: true });
+            } else {
+                // Otherwise just refresh the local dropdown list
+                await refresh();
+            }
+        } catch (err) {
+            console.error('Failed to delete record:', err);
+            alert('ไม่สามารถลบรายการได้ กรุณาลองใหม่อีกครั้ง');
+        }
     };
 
     return (
@@ -147,7 +168,7 @@ const RecordsDropdown = ({ label = 'KBank Statement OCR', variant = 'dark' }) =>
                                         return (
                                             <tr
                                                 key={r.id}
-                                                onClick={() => go(r.id)}
+                                                onClick={() => go(r)}
                                                 className={`cursor-pointer transition-colors duration-150 ${
                                                     isActive
                                                         ? 'bg-blue-50/70 hover:bg-blue-50'
@@ -182,7 +203,7 @@ const RecordsDropdown = ({ label = 'KBank Statement OCR', variant = 'dark' }) =>
                                                         onClick={(e) => {
                                                             e.preventDefault();
                                                             e.stopPropagation();
-                                                            go(r.id);
+                                                            go(r);
                                                         }}
                                                         className={`p-2 rounded-lg hover:bg-blue-50 text-blue-600 ${
                                                             isActive ? 'opacity-60 cursor-default' : ''
@@ -193,9 +214,13 @@ const RecordsDropdown = ({ label = 'KBank Statement OCR', variant = 'dark' }) =>
                                                     </button>
                                                     <button
                                                         type="button"
-                                                        onClick={(e) => del(e, r.id)}
-                                                        className="p-2 rounded-lg hover:bg-red-50 text-red-600"
-                                                        title="ลบ"
+                                                        onClick={(e) => { 
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            del(e, r.id);
+                                                        }}
+                                                        className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-all active:scale-95"
+                                                        title="ซ่อนรายการ"
                                                     >
                                                         <Trash2 className="w-4 h-4" />
                                                     </button>

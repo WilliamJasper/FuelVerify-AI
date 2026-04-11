@@ -38,7 +38,7 @@ const runFakeProgress = (
     })();
 };
 
-const UploadStatementPage = () => {
+const UploadStatementPageKBANK = () => {
     const navigate = useNavigate();
     const { id } = useParams();
     const [file, setFile] = useState(null);
@@ -59,6 +59,14 @@ const UploadStatementPage = () => {
         }
     };
 
+    const handleClearFile = () => {
+        setFile(null);
+        setError(null);
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+    };
+
     const handleUpload = async () => {
         if (!file || !id) return;
         setLoading(true);
@@ -68,36 +76,37 @@ const UploadStatementPage = () => {
         isCancelledRef.current = false;
 
         try {
-            abortControllerRef.current?.abort();
+            if (abortControllerRef.current) {
+                abortControllerRef.current.abort();
+            }
             abortControllerRef.current = new AbortController();
 
-            const apiCall = uploadStatement(file, abortControllerRef.current.signal).then(
-                (data) => ({ data }),
-            );
-            const runProgress = runFakeProgress(
+            // Start progress runner
+            const progressPromise = runFakeProgress(
                 setLoadingStep,
                 setLoadingProgress,
                 isCancelledRef,
             );
-            const [response] = await Promise.all([apiCall, runProgress]);
 
+            const result = await uploadStatement(file, abortControllerRef.current.signal);
+            
             if (isCancelledRef.current) return;
             
-            // รอให้บันทึกลง SQLite ก่อน
-            await updateRecordStatement(id, response.data);
+            await updateRecordStatement(id, result);
             
             setLoadingProgress(100);
             setLoadingStep(4);
             
             navigateTimeoutRef.current = setTimeout(() => {
                 setLoading(false);
-                navigate(`/dashboard/${id}`);
-            }, 1000);
+                navigate(`/dashboard/kbank/${id}`);
+            }, 800);
         } catch (err) {
+            console.error("KBank Upload error:", err);
             if (!isCancelledRef.current) {
                 setError(
                     err.response?.data?.detail ||
-                        'เกิดข้อผิดพลาดในการประมวลผลไฟล์',
+                        'เกิดข้อผิดพลาดในการประมวลผลไฟล์ กรุณาลองใหม่อีกครั้ง',
                 );
             }
             setLoading(false);
@@ -145,7 +154,7 @@ const UploadStatementPage = () => {
     };
 
     return (
-        <div className="min-h-screen bg-[#F8FAFC] text-slate-900 font-sans">
+        <div className="min-h-screen ocean-bg text-slate-900 font-sans pb-20">
             <LoadingOverlay
                 loading={loading}
                 loadingProgress={loadingProgress}
@@ -153,40 +162,40 @@ const UploadStatementPage = () => {
                 onCancel={handleCancelUpload}
             />
 
-            <UploadStatementHeader />
+            <UploadStatementHeader bank="kbank" />
 
             <main
-                className={`max-w-[1400px] mx-auto px-10 py-12 flex flex-col items-center transition-all duration-700 ease-in-out ${
-                    loading ? 'opacity-0 scale-95 pointer-events-none' : 'opacity-100 scale-100'
+                className={`max-w-[1400px] mx-auto px-6 md:px-10 py-16 flex flex-col items-center transition-all duration-1000 ease-in-out ${
+                    loading ? 'opacity-0 scale-95 pointer-events-none translate-y-10' : 'opacity-100 scale-100 translate-y-0'
                 }`}
             >
-                <div className="flex items-center gap-2 mb-6 text-emerald-700 kbank-fade-in">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span className="text-base font-semibold text-slate-700">
-                        พร้อมใช้งานผู้ช่วยอ่านใบแจ้งยอด KBank อัตโนมัติ
+                <div className="flex items-center gap-3 mb-8 text-emerald-700 kbank-fade-in bg-white/50 px-4 py-2 rounded-full border border-emerald-100/50 backdrop-blur-sm shadow-sm">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.5)]"></span>
+                    <span className="text-sm font-bold tracking-wide uppercase">
+                        KBank Smart OCR Engine Active
                     </span>
                 </div>
 
-                <div className="text-center mb-10 kbank-fade-in-delay-1">
-                    <h1 className="text-5xl font-extrabold tracking-tight mb-4 text-slate-900 font-display">
-                        อัปโหลดใบแจ้งยอด{' '}
-                        <span className="text-[#00A950]">KBank Statement</span>
+                <div className="text-center mb-12 kbank-fade-in-delay-1 max-w-3xl">
+                    <h1 className="text-5xl md:text-6xl font-extrabold tracking-tight mb-6 text-slate-900 leading-tight">
+                        อัปโหลดใบแจ้งยอด <br/>
+                        <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#00A950] to-[#00D064]">KBank Statement</span>
                     </h1>
-                    <p className="text-slate-700 text-lg max-w-2xl mx-auto leading-relaxed">
-                        เครื่องมือช่วยอ่านและสรุปรายการจากใบแจ้งยอดบัตรเครดิต/ฟลีทการ์ดกสิกรไทย
-                        ลดเวลาคีย์มือ ช่วยตรวจสอบยอดและดอกเบี้ยให้ครบในที่เดียว
+                    <p className="text-slate-600 text-lg md:text-xl font-medium leading-relaxed">
+                        ระบบช่วยอ่านและวิเคราะห์ข้อมูลจากใบแจ้งยอดกสิกรไทยอัตโนมัติ <br className="hidden md:block"/> 
+                        แม่นยำสูง พร้อมสรุปดอกเบี้ยและค่าธรรมเนียมให้คุณทันที
                     </p>
                 </div>
 
-                <div className="flex gap-3 mb-12 kbank-fade-in-delay-2">
-                    <div className="px-4 py-1.5 bg-[#ECFDF3] text-[#15803D] rounded-full text-sm font-medium border border-[#BBF7D0]">
-                        ● KBank PDF Statement
+                <div className="flex flex-wrap justify-center gap-3 mb-16 kbank-fade-in-delay-2">
+                    <div className="px-5 py-2 bg-white/80 text-emerald-800 rounded-2xl text-sm font-bold border border-emerald-100 shadow-sm hover-lift">
+                        <span className="text-emerald-500 mr-2">✓</span> KBank PDF Verified
                     </div>
-                    <div className="px-4 py-1.5 bg-[#E0F2FE] text-[#0369A1] rounded-full text-sm font-medium border border-[#BAE6FD]">
-                        ● ตรวจยอด & ดอกเบี้ยอัตโนมัติ
+                    <div className="px-5 py-2 bg-white/80 text-blue-800 rounded-2xl text-sm font-bold border border-blue-100 shadow-sm hover-lift">
+                        <span className="text-blue-500 mr-2">✓</span> AI Data Extraction
                     </div>
-                    <div className="px-4 py-1.5 bg-[#FEF3C7] text-[#B45309] rounded-full text-sm font-medium border border-[#FDE68A]">
-                        ● รองรับส่งออกเพื่องานบัญชี
+                    <div className="px-5 py-2 bg-white/80 text-amber-800 rounded-2xl text-sm font-bold border border-amber-100 shadow-sm hover-lift">
+                        <span className="text-amber-500 mr-2">✓</span> Accounting Ready
                     </div>
                 </div>
 
@@ -203,10 +212,12 @@ const UploadStatementPage = () => {
                     triggerInput={triggerFileInput}
                     onUpload={handleUpload}
                     onErrorClear={() => setError(null)}
+                    onClear={handleClearFile}
+                    bank="kbank"
                 />
             </main>
         </div>
     );
 };
 
-export default UploadStatementPage;
+export default UploadStatementPageKBANK;

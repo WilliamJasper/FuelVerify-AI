@@ -37,13 +37,13 @@ function extractDescWithoutBranch(desc) {
     return match ? match[1].trim() : trimmed;
 }
 
-const TransactionTable = ({ card, txnMatchStatus, slipResult }) => (
+const TransactionTable = ({ card, txnMatchStatus, slipResult, bank = 'kbank' }) => (
     <div className="rounded-[24px] bg-slate-50 border border-slate-200 overflow-x-auto overflow-y-hidden shadow-inner">
         <table className="w-full text-left min-w-[900px]">
             <thead className="bg-[#1E293B] text-slate-100 text-sm font-bold uppercase tracking-wider">
                 <tr>
                     <th className="px-8 py-6 w-16 text-center">#</th>
-                    <th className="px-8 py-6">วันที่ใช้บัตร</th>
+                    <th className="px-8 py-6">{bank === 'bbl' ? 'วันที่ทำรายการ' : 'วันที่ใช้บัตร'}</th>
                     <th className="px-8 py-6">วันที่บันทึก</th>
                     <th className="px-8 py-6 min-w-[200px]">รายการ</th>
                     <th className="px-8 py-6 whitespace-nowrap">
@@ -204,15 +204,15 @@ const TransactionTable = ({ card, txnMatchStatus, slipResult }) => (
         <div className="bg-slate-100 px-8 py-8 flex justify-end items-center gap-16 border-t-2 border-slate-300">
             <div className="flex items-center gap-4">
                 <span className="text-slate-700 text-sm font-bold uppercase tracking-widest">
-                    ยอดก่อนหน้า:
+                    {bank === 'bbl' ? 'วงเงิน:' : 'ยอดก่อนหน้า:'}
                 </span>
                 <span className="text-slate-900 font-black text-2xl tracking-tighter">
-                    ฿{card.previous_balance}
+                    ฿{bank === 'bbl' ? card.credit_limit : card.previous_balance}
                 </span>
             </div>
             <div className="flex items-center gap-4">
                 <span className="text-slate-700 text-sm font-bold uppercase tracking-widest">
-                    ยอดคงค้างรวม:
+                    {bank === 'bbl' ? 'ยอดเงินรวมทั้งสิ้น (Total Amount):' : 'ยอดคงค้างรวม:'}
                 </span>
                 <div className="px-6 py-3 bg-white border border-blue-200 rounded-[20px] shadow-sm">
                     <span className="text-blue-700 font-black text-3xl tracking-tighter">

@@ -1,164 +1,88 @@
-function amtNorm(v) {
-  return parseFloat((v || '').toString().replace(/,/g, '')).toFixed(2);
-}
-
-function extractMerchantKeywords(merchant = '') {
-  const stop = new Set(['TRACE', 'APPR', 'TID', 'DATE', 'TIME', 'RRN', 'REF', 'STAN', 'NAKORNRATSIMA', 'MAKORNRATSIMA']);
-  return merchant
-    .replace(/^PTTST\.D_|^PTTRM_/, '')
-    .split(/[\s_]+/)
-    .map((k) => (k || '').replace(/[^A-Za-z]/g, '').toUpperCase())
-    .filter((k) => k.length >= 3 && !stop.has(k));
-}
+import { 
+  normalizeAmount, 
+  normalizeDate, 
+  extractMerchantKeywords, 
+  last4FromCardNo 
+} from './matching.js';
 
 /**
- * Match 1 สลิปหน้า -> statement transaction (ใช้เหมือน logic ใน SlipPreview เดิม)
+ * Match 1 สลิปหน้า -> statement transaction
  * คืนค่า match flags เพื่อเอาไปทำ UI ตรวจจับความผิดปกติ
  */
 export function matchSlipToStatement(currentPage, result) {
   const pv = currentPage?.manualValues || currentPage?.correctedValues || currentPage?.values || {};
-  const slipDate = pv.date;
-  const slipAmount = pv.amount;
+  const slipDate = normalizeDate(pv.date);
+  const slipAmount = normalizeAmount(pv.amount);
   const slipMerchant = pv.merchant || '';
-  /** เลข 4 ตัวจากสลิปเท่านั้น — ไม่เติมจากเลขบัตรในรายการ (กันสับสนกับ OCR) */
-  const slipLast4FromSlip = pv.last4 ? String(pv.last4).trim() : '';
-  let inferredLast4FromCard = null;
-  let last4ForMatch = slipLast4FromSlip;
-
+  const slipLast4 = pv.last4 ? String(pv.last4).trim() : '';
+  
   const merchantKeywords = extractMerchantKeywords(slipMerchant);
+  const hasKeywords = merchantKeywords.length > 0;
 
   let matchedCard = null;
   let matchedTxn = null;
   let matchedTxnIndex = null;
+  let inferredLast4FromCard = null;
 
-  if (result?.data && slipDate && slipAmount) {
-    const slipAmt = amtNorm(slipAmount);
+  if (result?.data && slipDate) {
+    // Pass 1: "Super Strict" - ร้านตรง + วันที่ตรง + ยอดตรง + เลขบัตรตรง
+    // Pass 2: "Strong Match" - ร้านตรง + วันที่ตรง + ยอดตรง (เลขบัตรไม่ต้องตรง/ไม่มีก็ยอม)
+    // Pass 3: "Classic" - เลขบัตรตรง + ร้านตรง + วันที่ตรง + ยอดตรง (เผื่อ pass 1 หลุด)
+    // Pass 4: "Classic Soft" - ร้านตรง + วันที่ตรง + ยอดตรง (ยอมถ้าร้านตรงเป๊ะแม้ไม่มีเลขบัตร)
+    
+    // เราจะวนหาเพื่อหา "ผู้ชนะ" ที่ดีที่สุด
+    for (const card of result.data) {
+      const cardL4 = last4FromCardNo(card.card_no);
+      const isL4Match = slipLast4 ? cardL4 === slipLast4 : false;
 
-    const hasMerchantKeywords = merchantKeywords.length > 0;
-    const matchPasses = [
-      // strict: เลขบัตร + ร้าน/สาขา ต้องตรง
-      (isL4Match, isMerchMatch) => isL4Match && isMerchMatch,
-      // ไม่มีเลขบัตรจากสลิป แต่มีร้านชัดเจน
-      (isL4Match, isMerchMatch) => !last4ForMatch && isMerchMatch,
-      // ยอม match ด้วย last4 อย่างเดียวได้ ก็ต่อเมื่อ "ไม่มี keyword ร้าน"
-      (isL4Match) => isL4Match && !hasMerchantKeywords,
-      // เคสอ่อนสุด (ไม่มี last4 และไม่มี keyword ร้าน)
-      () => !last4ForMatch && !hasMerchantKeywords,
-    ];
-
-    for (const passFn of matchPasses) {
-      for (const card of result.data) {
-        const isLast4Match = last4ForMatch
-          ? (card.card_no || '').replace(/\D/g, '').slice(-4) === last4ForMatch
-          : false;
-
-        for (let tIdx = 0; tIdx < (card.transactions || []).length; tIdx++) {
-          const txn = card.transactions[tIdx];
-          if (txn.type === 'ชำระเงิน') continue;
-
-          const dateOk = txn.date === slipDate;
-          const amtOk = amtNorm(txn.amount) === slipAmt && !isNaN(parseFloat(slipAmt));
-          const descUpper = (txn.desc || '').toUpperCase();
-
-          // ถ้า keyword ว่าง แปลว่า "ไม่สามารถตรวจร้าน/สาขาได้" ให้ถือว่า match ได้
-          const merchantOk =
-            merchantKeywords.length === 0 ||
-            merchantKeywords.some((kw) => descUpper.includes(kw.toUpperCase()));
-
-          if (dateOk && amtOk && passFn(isLast4Match, merchantOk)) {
-            matchedCard = card;
-            matchedTxn = txn;
-            matchedTxnIndex = tIdx;
-
-            if (!last4ForMatch) {
-              inferredLast4FromCard = (card.card_no || '').replace(/\D/g, '').slice(-4) || null;
-            }
-            break;
-          }
-        }
-        if (matchedTxn) break;
-      }
-      if (matchedTxn) break;
-    }
-  }
-
-  // Fallback: ถ้าจับคู่แบบ strict ไม่เจอ แต่ "คำร้าน/สาขา + วันที่ + ยอด" ตรงกัน
-  // ให้ลองแม้ last4 ไม่ตรง (ช่วยกรณี OCR last4 เพี้ยนจากรูปเอียง)
-  if (!matchedTxn && merchantKeywords.length > 0 && slipDate && slipAmount) {
-    for (const card of result?.data || []) {
-      for (let tIdx = 0; tIdx < (card.transactions || []).length; tIdx++) {
-        const txn = card.transactions[tIdx];
-        if (txn.type === 'ชำระเงิน') continue;
-
-        const dateOk = txn.date === slipDate;
-        const amtOk = amtNorm(txn.amount) === amtNorm(slipAmount) && !isNaN(parseFloat(slipAmount));
+      (card.transactions || []).forEach((txn, tIdx) => {
+        if (txn.type === 'ชำระเงิน' || txn.type === 'INTEREST') return;
+        
+        const txnDate = normalizeDate(txn.date);
+        const txnAmt = normalizeAmount(txn.amount);
         const descUpper = (txn.desc || '').toUpperCase();
-        const merchantOk = merchantKeywords.some((kw) =>
-          descUpper.includes(kw.toUpperCase()),
-        );
+        
+        const dateOk = !!slipDate && !!txnDate && slipDate === txnDate;
+        const amtOk = !!slipAmount && !!txnAmt && slipAmount === txnAmt;
+        const merchOk = hasKeywords && merchantKeywords.some(kw => descUpper.includes(kw));
 
-        if (dateOk && amtOk && merchantOk) {
+        // ลำดับความสำคัญ
+        let score = 0;
+        if (dateOk && amtOk && merchOk && isL4Match) score = 10;
+        else if (dateOk && amtOk && merchOk) score = 8; // ร้านตรง + วันที่ตรง + ยอดตรง (น้ำหนักสูงตามลูกค้าร้องขอ)
+        else if (dateOk && amtOk && isL4Match) score = 6;
+        else if (dateOk && merchOk && isL4Match) score = 5;
+        // กรณี amount หาย หรืออ่านไม่ออก
+        else if (dateOk && merchOk && !slipAmount) score = 4;
+
+        if (score > 0 && (!matchedTxn || score > (matchedTxn._score || 0))) {
           matchedCard = card;
-          matchedTxn = txn;
+          matchedTxn = { ...txn, _score: score };
           matchedTxnIndex = tIdx;
-          break;
+          if (!slipLast4) inferredLast4FromCard = cardL4;
         }
-      }
-      if (matchedTxn) break;
+      });
     }
   }
 
-  // Fallback เมื่ออ่าน amount ไม่ได้:
-  // จับคู่ด้วย date + merchant (+last4 ถ้ามี) เฉพาะกรณีที่เจอ candidate เดียวเท่านั้น
-  if (!matchedTxn && merchantKeywords.length > 0 && slipDate && !slipAmount) {
-    const candidates = [];
-    for (const card of result?.data || []) {
-      const cardLast4 = (card.card_no || '').replace(/\D/g, '').slice(-4);
-      const isLast4Match = last4ForMatch ? cardLast4 === last4ForMatch : true;
-      if (!isLast4Match) continue;
-      for (let tIdx = 0; tIdx < (card.transactions || []).length; tIdx++) {
-        const txn = card.transactions[tIdx];
-        if (txn.type === 'ชำระเงิน') continue;
-        if (txn.date !== slipDate) continue;
-        const descUpper = (txn.desc || '').toUpperCase();
-        const merchantOk = merchantKeywords.some((kw) => descUpper.includes(kw.toUpperCase()));
-        if (!merchantOk) continue;
-        candidates.push({ card, txn, tIdx });
-      }
-    }
-    if (candidates.length === 1) {
-      matchedCard = candidates[0].card;
-      matchedTxn = candidates[0].txn;
-      matchedTxnIndex = candidates[0].tIdx;
-      if (!last4ForMatch) {
-        inferredLast4FromCard = (matchedCard.card_no || '').replace(/\D/g, '').slice(-4) || null;
-      }
-    }
-  }
-
+  // Final check for UI flags
   const hasCard = !!matchedCard;
   const hasTxn = !!matchedTxn;
 
-  const dateMatch = hasTxn ? matchedTxn.date === slipDate : null;
-  const amtMatch = hasTxn ? amtNorm(matchedTxn.amount) === amtNorm(slipAmount) : null;
-  const merchantMatch =
-    hasTxn &&
-    (merchantKeywords.length === 0 ||
-      merchantKeywords.some((kw) =>
-        (matchedTxn.desc || '').toUpperCase().includes(kw.toUpperCase()),
-      ));
+  const dateMatch = hasTxn ? normalizeDate(matchedTxn.date) === slipDate : null;
+  const amtMatch = hasTxn ? normalizeAmount(matchedTxn.amount) === slipAmount : null;
+  
+  const txnDesc = hasTxn ? (matchedTxn.desc || '').toUpperCase() : '';
+  const merchantMatch = hasTxn && hasKeywords ? merchantKeywords.some(kw => txnDesc.includes(kw)) : (hasKeywords ? false : null);
 
-  const cardLast4 = matchedCard ? (matchedCard.card_no || '').replace(/\D/g, '').slice(-4) : null;
-  let last4Match = null;
-  if (hasTxn && slipLast4FromSlip && cardLast4) {
-    last4Match = slipLast4FromSlip === cardLast4;
-  }
+  const matchedCardL4 = matchedCard ? last4FromCardNo(matchedCard.card_no) : null;
+  const last4Match = (hasTxn && slipLast4 && matchedCardL4) ? slipLast4 === matchedCardL4 : (slipLast4 ? false : null);
 
   return {
-    slipDate,
-    slipAmount,
+    slipDate: pv.date,
+    slipAmount: pv.amount,
     slipMerchant,
-    slipLast4: slipLast4FromSlip || null,
+    slipLast4: slipLast4 || null,
     inferredLast4FromCard,
     matchedCard,
     matchedTxn,

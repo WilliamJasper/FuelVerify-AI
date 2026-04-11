@@ -56,7 +56,24 @@ const SlipPreview = ({ slipResult, slipPage, setSlipPage, result, onRemovePage, 
     if (!timeValid) issueFields.push('เวลา');
     if (last4Match === false || !effectiveValues?.last4) issueFields.push('เลข 4 ตัว');
     if (amtMatch === false || !effectiveValues?.amount) issueFields.push('ยอดเงิน');
-    if (!hasTxn) issueFields.push('รายการบัตร');
+    if (!hasTxn) issueFields.push('หมายเลขบัตร');
+
+    useEffect(() => {
+        // ออโต้โฟกัสไปยังรายการถ้า Match ได้คะแนนสูง (ร้านตรง วันที่ตรง ยอดตรง)
+        const score = matchedTxn?._score || 0;
+        if (hasTxn && (score >= 8 || (dateMatch && amtMatch && merchantMatch && last4Match))) {
+            const label = matchedCard?.account_name;
+            const m = String(label || '').match(/\d+/);
+            const vip_val = m ? parseInt(m[0], 10) : Number.NaN;
+            
+            const timer = setTimeout(() => {
+                window.dispatchEvent(
+                    new CustomEvent('fuelverify:focus-txn', { detail: { label, vip: vip_val, txnIndex: matchedTxnIndex } }),
+                );
+            }, 600);
+            return () => clearTimeout(timer);
+        }
+    }, [slipPage, hasTxn, dateMatch, amtMatch, merchantMatch, last4Match, matchedCard, matchedTxnIndex, matchedTxn?._score]);
 
     return (
         <div className="mt-10">
@@ -270,7 +287,7 @@ const SlipPreview = ({ slipResult, slipPage, setSlipPage, result, onRemovePage, 
                             )}
                         </div>
                         <div className="flex justify-between gap-4 items-center py-3.5 px-4 bg-white border-t-2 border-slate-300">
-                            <span className="text-slate-700 font-semibold text-lg shrink-0">รายการบัตร</span>
+                            <span className="text-slate-700 font-semibold text-lg shrink-0">หมายเลขบัตร</span>
                             <span
                                 className={`font-bold text-right text-lg ${
                                     hasCard ? 'text-emerald-700' : 'text-slate-600'

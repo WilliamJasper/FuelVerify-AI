@@ -1,0 +1,2000 @@
+﻿from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List
+import pdfplumber
+import io
+import re
+import base64
+import json
+import sqlite3
+
+from PIL import Image, ImageOps
+import pytesseract
+import fitz  # PyMuPDF
+import os
+import threading
+import tempfile
+import subprocess
+import shutil
+import sys
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests
+
+# เนเธซเธฅเธ” backend/.env (เธ–เนเธฒเธกเธต) โ€” เนเธเธฅเนเธเธตเนเธญเธขเธนเนเนเธ .gitignore เธญเธขเนเธฒ commit เธเธตเธขเนเธเธฃเธดเธ
+try:
+    from dotenv import load_dotenv
+
+    _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+    load_dotenv(os.path.join(_BACKEND_DIR, ".env"))
+except ImportError:
+    pass
+
+# เธ•เธฑเนเธเธเนเธฒเธ—เธตเนเธญเธขเธนเนเนเธเธฃเนเธเธฃเธก Tesseract-OCR เธชเธณเธซเธฃเธฑเธ Windows
+tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+if os.path.exists(tesseract_path):
+    pytesseract.pytesseract.tesseract_cmd = tesseract_path
+
+# เธเธงเธฒเธกเน€เธฃเนเธงเธชเธฅเธดเธ: เธเธฃเธฑเธเนเธ”เนเธ”เนเธงเธข env เนเธ”เธขเนเธกเนเธ•เนเธญเธเนเธเนเนเธเนเธ”
+# SLIP_PDF_DPI (เธเนเธฒเน€เธฃเธดเนเธก 180) เธฅเธ” DPI = เน€เธฃเธเน€เธ”เธญเธฃเน PDF เน€เธฃเนเธง/เนเธเธฅเนเน€เธฅเนเธ เนเธ•เน OCR เธญเธฒเธเธญเนเธญเธเธฅเธเน€เธฅเนเธเธเนเธญเธข
+# SLIP_TYPHOON_MAX_RETRIES (เธเนเธฒเน€เธฃเธดเนเธก 1) เธฅเธ”เธฃเธญเธ = เน€เธฃเนเธงเธเธถเนเธเธกเธฒเธ เนเธ•เนเธ–เนเธฒ Typhoon เธญเนเธฒเธเน€เธเธตเนเธขเธเธญเธฒเธเธ•เนเธญเธเธเธถเนเธ Tesseract/statement
+# SLIP_OCR_WORKERS (เธเนเธฒเน€เธฃเธดเนเธก 2) เธเธฃเธฐเธกเธงเธฅเธเธฅเธซเธฅเธฒเธขเธซเธเนเธฒ PDF เธเธฃเนเธญเธกเธเธฑเธ (เนเธกเนเน€เธเธดเธเธเธณเธเธงเธเธซเธเนเธฒ)
+# SLIP_ROTATION_FALLBACK=1 (เธเนเธฒเน€เธฃเธดเนเธก) เธ–เนเธฒเธญเนเธฒเธเธ—เธตเนเธกเธธเธก 0ยฐ เนเธฅเนเธงเธเนเธญเธกเธนเธฅเธซเธฅเธฑเธเธซเธฒเธข เนเธซเนเธฅเธญเธเธซเธกเธธเธ 90/180/270 เธเธฑเธ Typhoon (เนเธเนเธชเธฅเธดเธเธ–เนเธฒเธขเน€เธญเธตเธขเธ)
+# SLIP_TYPHOON_TIMEOUT_SEC (เธเนเธฒเน€เธฃเธดเนเธก 20) เน€เธงเธฅเธฒเธฃเธญ Typhoon เธ•เนเธญ request
+# SLIP_TYPHOON_FAIL_STREAK_BREAKER (เธเนเธฒเน€เธฃเธดเนเธก 4) เธ–เนเธฒเธฅเนเธกเน€เธซเธฅเธงเธ•เธดเธ”เธเธฑเธเธ–เธถเธเธเนเธฒเธเธตเน เนเธซเนเธเนเธฒเธก Typhoon เธเธฑเนเธงเธเธฃเธฒเธงเนเธเธฃเธญเธเธญเธฑเธเนเธซเธฅเธ”เธเธฑเนเธ
+# TYPHOON_API_KEY โ€” เธเธฑเธเธเธฑเธเธ•เธฑเนเธเนเธ environment เธซเธฃเธทเธญ backend/.env (เธญเธขเนเธฒเนเธชเนเธเธตเธขเนเนเธเนเธเนเธ”)
+# TYPHOON_OCR_URL โ€” เนเธกเนเธเธฑเธเธเธฑเธ เธเนเธฒเน€เธฃเธดเนเธก https://api.opentyphoon.ai/v1/ocr
+SLIP_PDF_DPI = int(os.environ.get("SLIP_PDF_DPI", "180"))
+SLIP_TYPHOON_MAX_RETRIES = int(os.environ.get("SLIP_TYPHOON_MAX_RETRIES", "1"))
+SLIP_OCR_WORKERS = int(os.environ.get("SLIP_OCR_WORKERS", "2"))
+SLIP_TYPHOON_TIMEOUT_SEC = max(5, int(os.environ.get("SLIP_TYPHOON_TIMEOUT_SEC", "20")))
+SLIP_TYPHOON_FAIL_STREAK_BREAKER = max(2, int(os.environ.get("SLIP_TYPHOON_FAIL_STREAK_BREAKER", "4")))
+SLIP_ROTATION_FALLBACK = os.environ.get("SLIP_ROTATION_FALLBACK", "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+SLIP_DEBUG_VERBOSE = os.environ.get("SLIP_DEBUG_VERBOSE", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+# เธ–เนเธฒเน€เธเธดเธ”: PDF เธ—เธธเธเนเธเธฅเนเธเธฐเธเธขเธฒเธขเธฒเธกเนเธเธฅเธเน€เธเนเธ searchable text-layer เธเนเธญเธเน€เธเนเธฒ Typhoon
+SLIP_FORCE_TEXT_LAYER = os.environ.get("SLIP_FORCE_TEXT_LAYER", "0").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+SLIP_TEXTLAYER_PROVIDER = (os.environ.get("SLIP_TEXTLAYER_PROVIDER") or "auto").strip().lower()
+ILOVEPDF_PUBLIC_KEY = (os.environ.get("ILOVEPDF_PUBLIC_KEY") or "").strip()
+ILOVEPDF_SECRET_KEY = (os.environ.get("ILOVEPDF_SECRET_KEY") or "").strip()
+ILOVEPDF_REGION = (os.environ.get("ILOVEPDF_REGION") or "eu").strip().lower()
+ILOVEPDF_TIMEOUT_SEC = max(15, int(os.environ.get("ILOVEPDF_TIMEOUT_SEC", "120")))
+app = FastAPI()
+
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fuelverify.db")
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    # เธ•เธฒเธฃเธฒเธเน€เธเนเธเธเนเธญเธกเธนเธฅ Record เธซเธฅเธฑเธ (Metadata + Statement Results)
+    c.execute('''CREATE TABLE IF NOT EXISTS records
+                 (id TEXT PRIMARY KEY, name TEXT, date TEXT, type TEXT, data TEXT, hidden INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    
+    # เธญเธฑเธเนเธซเธฅเธ” Schema เน€เธเนเธฒเนเธซเนเธฃเธญเธเธฃเธฑเธ hidden (Migration)
+    try:
+        c.execute("ALTER TABLE records ADD COLUMN hidden INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass # เธเธญเธฅเธฑเธกเธเนเธกเธตเธญเธขเธนเนเนเธฅเนเธง
+        
+    # เธ•เธฒเธฃเธฒเธเน€เธเนเธเธฃเธนเธเธ เธฒเธเนเธฅเธฐเธเธฅ OCR เนเธเธเธฅเธฐเน€เธญเธตเธขเธ” (เนเธ—เธ IndexedDB)
+    c.execute('''CREATE TABLE IF NOT EXISTS slip_blobs
+                 (id TEXT PRIMARY KEY, data TEXT)''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# Enable CORS for React frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+def extract_kasikorn_ocr(pdf_bytes):
+    data_rows = []
+    card_map = {} # card_no_no_space -> index in data_rows
+    seen_cards = set()
+    
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        # Page 1: Card List Summary
+        p1 = pdf.pages[0]
+        text = p1.extract_text()
+        if text:
+            for line in text.split('\n'):
+                line = line.strip()
+                tokens = line.split()
+                # Pattern: [4 digits] [70XX] [XXXX] [4 digits] [Name...] [Limit] [Balance] [Min Payment]
+                if len(tokens) >= 7 and tokens[1] == '70XX' and tokens[2] == 'XXXX':
+                    card_no = f"{tokens[0]} {tokens[1]} {tokens[2]} {tokens[3]}"
+                    no_space_card = re.sub(r'\s+', '', card_no)
+                    
+                    if no_space_card not in seen_cards:
+                        seen_cards.add(no_space_card)
+                        
+                        # Amounts are usually at the end. Let's find the first money-like token after card_no
+                        # Money usually has ',' or '.'
+                        amt_starts_at = -1
+                        for i in range(4, len(tokens)):
+                            if re.search(r'[\d,]+\.\d{2}', tokens[i]) or (len(tokens[i]) >= 5 and re.match(r'^[\d,.-]+$', tokens[i])):
+                                amt_starts_at = i
+                                break
+                        
+                        if amt_starts_at != -1 and amt_starts_at + 2 < len(tokens):
+                            account_full_name = " ".join(tokens[4:amt_starts_at])
+                            credit_limit = tokens[amt_starts_at]
+                            balance = tokens[amt_starts_at+1]
+                            min_payment = tokens[amt_starts_at+2]
+                        else:
+                            # Fallback if logic above fails
+                            account_full_name = " ".join(tokens[4:-3])
+                            credit_limit = tokens[-3] if len(tokens) > 3 else "0.00"
+                            balance = tokens[-2] if len(tokens) > 2 else "0.00"
+                            min_payment = tokens[-1] if len(tokens) > 1 else "0.00"
+
+                        # Extract ID number from name (e.g., "VIP 36" -> "36")
+                        name_num_match = re.search(r'(\d+)', account_full_name)
+                        display_id = name_num_match.group(1) if name_num_match else tokens[3]
+
+                        data_rows.append({
+                            "card_no": card_no,
+                            "card_id": display_id,
+                            "account_name": account_full_name.strip(),
+                            "credit_limit": credit_limit,
+                            "balance": balance,
+                            "min_payment": min_payment,
+                            "previous_balance": "0.00",
+                            "total_balance_calc": "0.00",
+                            "transaction_count": 0,
+                            "transactions": []
+                        })
+                        card_map[no_space_card] = len(data_rows) - 1
+
+        # Subsequent Pages: Transactions
+        current_card_index = None
+        for page in pdf.pages[1:]:
+            p_text = page.extract_text()
+            if not p_text: continue
+
+            # Guardrail: only parse pages that look like per-card details pages.
+            # Prevents accidentally attaching "Methods of Payment..." (etc.) to the last seen card.
+            if "ACCOUNT DETAILS" not in p_text.upper():
+                continue
+            
+            for line in p_text.split('\n'):
+                line = line.strip()
+                
+                # Identify Card section
+                card_match = re.search(r'CARD\s+(?:TYPE)?\s*(\d{4}\s*70XX\s*XXXX\s*\d{4})', line, re.IGNORECASE)
+                if card_match:
+                    found_no = re.sub(r'\s+', '', card_match.group(1))
+                    if found_no in card_map:
+                        current_card_index = card_map[found_no]
+                
+                if current_card_index is not None:
+                    # Match PREVIOUS BALANCE
+                    # Statement text often contains footnote digits glued to the label,
+                    # e.g. "PREVIOUS BALANCE1 4,780.10" โ€” grab the final money token.
+                    prev_bal_match = re.search(
+                        r'PREVIOUS\s+BALANCE.*?([\d,]+\.\d{2})\s*$',
+                        line,
+                        re.IGNORECASE
+                    )
+                    if prev_bal_match:
+                        data_rows[current_card_index]["previous_balance"] = prev_bal_match.group(1)
+
+                    # Match TOTAL BALANCE (from bottom of txn page)
+                    # Example: "***** TOTAL BALANCE *****7 3,910.00"
+                    total_bal_match = re.search(
+                        r'TOTAL\s+BALANCE.*?([\d,]+\.\d{2})\s*$',
+                        line,
+                        re.IGNORECASE
+                    )
+                    if total_bal_match:
+                        data_rows[current_card_index]["total_balance_calc"] = total_bal_match.group(1)
+
+                    # Match txn: [Date] [PostDate] [Description] [Amount]
+                    # We look for date pattern at start
+                    txn_match = re.search(r'^(\d{2}/\d{2}/\d{2})\s+(\d{2}/\d{2}/\d{2})\s+(.*?)\s+([\d,.-]+)$', line)
+                    if txn_match:
+                        date = txn_match.group(1)
+                        post_date = txn_match.group(2)
+                        desc = txn_match.group(3).strip()
+                        amount = txn_match.group(4)
+                        
+                        # Aggressively clean trailing digits (sequence numbers/footnotes) from description
+                        # e.g. "JORHOR2" -> "JORHOR" เนเธ•เนเธฃเธฐเธงเธฑเธเธชเธฒเธเธฒเธ—เธตเนเธฅเธเธ—เนเธฒเธขเธ”เนเธงเธขเธ•เธฑเธงเน€เธฅเธ
+                        # เน€เธเธฅเธตเนเธขเธเน€เธเนเธเธฅเธเน€เธเธเธฒเธฐเธ•เธฑเธงเน€เธฅเธเธ—เธตเนเธ•เธดเธ”เธกเธฒเธ—เนเธฒเธขเธชเธธเธ”เธเธฃเธดเธเน เนเธฅเธฐเนเธกเนเธกเธตเน€เธงเนเธเธงเธฃเธฃเธ เน€เธเนเธ NAKHONRATSIMA14 -> NAKHONRATSIMA
+                        desc = re.sub(r'(?<=[A-Za-zเธ-เน])\d{1,2}$', '', desc).strip()
+                        
+                        txn_type = "เธเธณเธฃเธฐเน€เธเธดเธ" if any(k in desc.upper() for k in ["PAYMENT", "THANK YOU"]) else "เน€เธ•เธดเธกเธเนเธณเธกเธฑเธ"
+                        
+                        # Clean amount from multiple dashes if it's a payment
+                        if txn_type == "เธเธณเธฃเธฐเน€เธเธดเธ":
+                            amount = amount.replace('--', '-').replace('-', '')
+
+                        # Deduplicate transactions
+                        is_duplicate = any(
+                            t['date'] == date and t['post_date'] == post_date and t['desc'] == desc and t['amount'] == amount
+                            for t in data_rows[current_card_index]["transactions"]
+                        )
+                        
+                        if not is_duplicate:
+                            data_rows[current_card_index]["transactions"].append({
+                                "date": date,
+                                "post_date": post_date,
+                                "desc": desc,
+                                "type": txn_type,
+                                "amount": amount
+                            })
+                            data_rows[current_card_index]["transaction_count"] += 1
+
+                    # Match interest charge (Kasikorn statements may show it with a single date)
+                    # Example: "28/02/26 INTEREST CHARGE14 204.75"
+                    interest_match = re.search(
+                        r'^(\d{2}/\d{2}/\d{2})\s+INTEREST\s+CHARGE\d*\s+([\d,.-]+)$',
+                        line,
+                        re.IGNORECASE
+                    )
+                    if interest_match:
+                        date = interest_match.group(1)
+                        post_date = date
+                        desc = "INTEREST CHARGE"
+                        amount = interest_match.group(2)
+
+                        is_duplicate = any(
+                            t['date'] == date and t['post_date'] == post_date and t['desc'] == desc and t['amount'] == amount
+                            for t in data_rows[current_card_index]["transactions"]
+                        )
+                        if not is_duplicate:
+                            data_rows[current_card_index]["transactions"].append({
+                                "date": date,
+                                "post_date": post_date,
+                                "desc": desc,
+                                "type": "INTEREST",
+                                "amount": amount
+                            })
+                            data_rows[current_card_index]["transaction_count"] += 1
+                            
+    return data_rows
+
+
+def _image_from_upload_bytes(filename: str, content: bytes) -> Image.Image:
+    """
+    Supports:
+    - PDF (uses first page)
+    - common images: png/jpg/jpeg/webp
+    """
+    lower = (filename or "").lower()
+    if lower.endswith(".pdf"):
+        doc = fitz.open(stream=content, filetype="pdf")
+        if doc.page_count < 1:
+            raise ValueError("Empty PDF")
+        page = doc.load_page(0)
+        pix = page.get_pixmap(dpi=SLIP_PDF_DPI, alpha=False)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        doc.close()
+        return img
+
+    try:
+        return Image.open(io.BytesIO(content)).convert("RGB")
+    except Exception as e:
+        raise ValueError(f"Unsupported file type: {filename}") from e
+
+
+
+def _parse_slip_text(ocr_text: str) -> dict:
+    """
+    Parse OCR text เธเธฒเธเธชเธฅเธดเธเธเนเธณเธกเธฑเธ PTT เน€เธเธทเนเธญเธ”เธถเธ merchant, date, last4, amount
+    """
+    merchant = None
+    date = None
+    time_ = None
+    last4 = None
+    amount = None
+    card_type = None
+
+    # ===== เธฅเธ HTML tags เนเธฅเธฐ Markdown เธญเธญเธ =====
+    # เนเธชเน newline เธ—เธตเน </tr> เน€เธเธทเนเธญเธฃเธฑเธเธฉเธฒเนเธเธฃเธเธชเธฃเนเธฒเธเนเธ–เธงเธเธญเธ table
+    clean_text = re.sub(r'</tr>', '\n', ocr_text, flags=re.IGNORECASE)
+    # เธฅเธ <br/> เนเธ—เธเธ”เนเธงเธข space
+    clean_text = re.sub(r'<br\s*/?>', ' ', clean_text, flags=re.IGNORECASE)
+    # เธฅเธ HTML tags เธ—เธตเนเน€เธซเธฅเธทเธญ
+    clean_text = re.sub(r'<[^>]+>', ' ', clean_text)
+    # เธฅเธ markdown bold ** เน€เธเธเธฒเธฐเธ—เธตเนเธ•เธดเธ”เธเธฑเธ word character (เนเธกเนเธฅเธ literal ** เน€เธเนเธ THB **)
+    clean_text = re.sub(r'\*\*(?=\w)', '', clean_text)  # opening ** เธเนเธญเธเธ•เธฑเธงเธญเธฑเธเธฉเธฃ
+    clean_text = re.sub(r'(?<=\w)\*\*', '', clean_text)  # closing ** เธซเธฅเธฑเธเธ•เธฑเธงเธญเธฑเธเธฉเธฃ
+    # เธฅเธ whitespace เธเนเธณ
+    clean_text = re.sub(r'[ \t]+', ' ', clean_text)
+
+    lines = clean_text.split('\n')
+
+    # --- Merchant: เธซเธฒเธเธทเนเธญเธชเธฒเธเธฒเธเธฃเธดเธ (PTTRM / PTTST.D / X.D pattern) ---
+    # 1. เธซเธฒ PTTRM เธเนเธญเธ (เธเธฑเธเนเธเนเธเธฃเธฃเธ—เธฑเธ”เน€เธ”เธตเธขเธงเธเธฑเธ เนเธกเนเธเนเธฒเธก newline)
+    pttrm_search = re.search(r'(PTTRM)[ \t]+(\S+(?:[ \t]+\S+)?)', clean_text, re.IGNORECASE)
+    if pttrm_search:
+        location = pttrm_search.group(2).strip()
+        location = re.sub(r'\s*\d{2,3}[-โ€]\d{5,7}.*', '', location).strip()
+        location = re.sub(r'\s*KORAT.*', '', location, flags=re.IGNORECASE).strip()
+        location = re.sub(r'\s*NAKORN\w*.*', '', location, flags=re.IGNORECASE).strip()
+        location = re.sub(r'^(KR|KM)([A-Z])', r'\1 \2', location, flags=re.IGNORECASE)
+        merchant = f"PTTRM_{location}"
+
+    # 2. เธซเธฒ PTTST.D (เธกเธตเธเธธเธ” = เธเธทเนเธญเธชเธฒเธเธฒ)
+    if not merchant:
+        pttst_search = re.search(r'(PTTST\.\S*)\s+(.*?)(?:\s+TID:|\s+NAKORN\w*|\s+\d{2,3}[-โ€]\d{5,7}|$)', clean_text, re.IGNORECASE)
+        if pttst_search:
+            prefix = pttst_search.group(1).strip()
+            location = pttst_search.group(2).strip()
+            location = re.sub(r'\s*NAKORN\w*\s*', '', location, flags=re.IGNORECASE).strip()
+            location = re.sub(r'\s*TID:.*', '', location, flags=re.IGNORECASE).strip()
+            location = re.sub(r'\s*\d{2,3}[-โ€]\d{5,7}.*', '', location).strip()
+            merchant = f"{prefix}_{location}"
+
+    # 3. Fallback: เธซเธฒ pattern X.D เธ—เธตเน OCR เธญเนเธฒเธเธเธดเธ” (เน€เธเนเธ FTISF.D, FTTST.D เนเธ—เธ PTTST.D)
+    if not merchant:
+        fuzzy_search = re.search(r'(\w{3,6}\.D)\s+((?:PR\s+)?[A-Z][A-Z\s.]+?)(?:\s+NAKORN\w*|\s+MAKORN\w*|\s+TID:|\s+\d{2,3}[-โ€]\d{5,7}|$)', clean_text, re.IGNORECASE)
+        if fuzzy_search:
+            prefix = "PTTST.D"
+            location = fuzzy_search.group(2).strip()
+            location = re.sub(r'\s*[MN]AKORN\w*\s*', '', location, flags=re.IGNORECASE).strip()
+            merchant = f"{prefix}_{location}"
+
+    # 4. Fallback: OCR เธญเนเธฒเธเน€เธเนเธ "PTT STATION D BANMAI..." เธซเธฃเธทเธญ "FIRST : D BANMAI..."
+    if not merchant:
+        station_d = re.search(r'(?:PTT\s+)?STATION\s+D\s+(.*?)(?:\s+NAKORN\w*|\s+MAKORN\w*|\s+TID:|$)', clean_text, re.IGNORECASE)
+        if station_d:
+            location = station_d.group(1).strip()
+            location = re.sub(r'\s*[MN]AKORN\w*\s*', '', location, flags=re.IGNORECASE).strip()
+            merchant = f"PTTST.D_{location}"
+
+    # 5. Fallback: OCR เธญเนเธฒเธเน€เธเนเธ "FIRST : D BANMAI..." เธซเธฃเธทเธญ "FIRST : BANMAI..." (เธญเธฒเธเธกเธตเธซเธฃเธทเธญเนเธกเนเธกเธต D)
+    if not merchant:
+        first_d = re.search(r'FIRST\s*:?\s+(?:D\s+)?(.*?)(?:\s+[MN]AKORN\w*|\s+TID:|$)', clean_text, re.IGNORECASE)
+        if first_d:
+            location = first_d.group(1).strip()
+            location = re.sub(r'\s*[MN]AKORN\w*\s*', '', location, flags=re.IGNORECASE).strip()
+            merchant = f"PTTST.D_{location}"
+
+    # 6. Fallback เธชเธธเธ”เธ—เนเธฒเธข: เธซเธฒเธเธทเนเธญเธชเธ–เธฒเธเธ—เธตเนเธ—เธตเนเธฃเธนเนเธเธฑเธเนเธ”เธขเธ•เธฃเธ
+    if not merchant:
+        known_locations = [
+            (r'\b(BANMAI\s+(?:MAHACHAI|PETROLEU?M?))', 'PTTST.D'),
+            (r'\b(PONGKIT\s+BR\.?\s*\d?)', 'PTTST.D'),
+            (r'\b(PR\s+PETROLEUM\s+PT)', 'PTTST.D'),
+            (r'\b(JANPRASITH\s+PETR(?:\s+SARABURI)?)', 'PTTST.D'),
+            (r'\b(KR\s*JORHOR)', 'PTTRM'),
+        ]
+        for pattern, prefix in known_locations:
+            loc_match = re.search(pattern, clean_text, re.IGNORECASE)
+            if loc_match:
+                location = loc_match.group(1).strip()
+                if prefix == 'PTTRM':
+                    location = re.sub(r'^(KR|KM)([A-Z])', r'\1 \2', location, flags=re.IGNORECASE)
+                merchant = f"{prefix}_{location}"
+                break
+
+    if merchant:
+        # เธ•เธฑเธ” noise เธ—เธตเน OCR เธเธญเธเธเนเธงเธเธ—เนเธฒเธขเธเธทเนเธญเธฃเนเธฒเธ เน€เธเนเธ TRACE/APPR/TID/DATE/TIME
+        merchant = re.sub(
+            r"\s+(?:TRACE|APPR|TID|RRN|REF|STAN|DATE|TIME)\s*:?\s*[A-Z0-9:/\-]+.*$",
+            "",
+            merchant,
+            flags=re.IGNORECASE,
+        ).strip()
+
+    def _safe_last4(candidate: str):
+        if not candidate:
+            return None
+        c = str(candidate).strip()
+        # เธ•เธฑเธ”เน€เธฅเธเธ—เธตเนเธกเธฑเธเน€เธเนเธเธเธต (เธฃเธนเธเนเธเธเธชเธฅเธดเธ) / เธเนเธฒเธงเธฑเธเธ—เธตเน เนเธฅเธฐเน€เธฅเธเธเนเธณ
+        if not (re.fullmatch(r"\d{4}", c) and c != "0000"):
+            return None
+        if c.startswith("20") or c.startswith("19"):
+            return None
+        if c in ("2602", "0226", "1602", "0216"):
+            return None
+        return c
+
+    def _line_toxic_for_last4(line: str) -> bool:
+        """เธเธฃเธฃเธ—เธฑเธ”เธ—เธตเนเธกเธฑเธเธกเธตเน€เธฅเธเธญเธเธธเธกเธฑเธ•เธด/เนเธ—เธฃเนเธ/เน€เธงเธฅเธฒ โ€” เธซเนเธฒเธกเธ”เธถเธ last4 เธเธฒเธเธ—เธตเนเธเธตเน"""
+        s = (line or "").upper()
+        if re.search(r"\b(APPR|AUTH|TRACE|TID|RRN|REF|STAN)\s*:", s):
+            return True
+        if re.search(r"\bPOST\s*DATE\b", s):
+            return True
+        if "AVAILABLE BALANCE" in s or ("TOTAL" in s and "THB" in s):
+            return True
+        return False
+
+    # เธงเธเธซเธฒเน€เธเนเธเธฃเธญเธ เน เน€เธเธทเนเธญเนเธซเนเน€เธเนเธเธเนเธฒเนเธ”เนเธเธฃเธเธ—เธตเนเธชเธธเธ”เธเธฒเธ OCR text เน€เธ”เธตเธขเธงเธเธฑเธ
+    for _ in range(4):
+        # --- Date: เธฃเธนเธเนเธเธ dd/mm/yy เธซเธฃเธทเธญ dd/mm/yyyy ---
+        if not date:
+            date_match = re.search(r'DATE\s*:?\s*(\d{2}/\d{2}/\d{2,4})', clean_text, re.IGNORECASE)
+            if date_match:
+                date = date_match.group(1)
+            else:
+                date_match2 = re.search(r'(\d{2}/\d{2}/\d{2,4})', clean_text)
+                if date_match2:
+                    date = date_match2.group(1)
+
+        # --- Time: เธฃเธนเธเนเธเธ HH:MM:SS ---
+        if not time_:
+            time_match = re.search(r'TIME\s*:?\s*(\d{2}:\d{2}(?::\d{2})?)', clean_text, re.IGNORECASE)
+            if time_match:
+                time_ = time_match.group(1)
+            else:
+                generic_time = re.search(r'(?<!\d)(\d{2}:\d{2}(?::\d{2})?)(?!\d)', clean_text)
+                if generic_time:
+                    time_ = generic_time.group(1)
+
+        # --- Last 4 digits เธเธญเธเธเธฑเธ•เธฃ ---
+        if not last4:
+            # 0) เธเธฑเธเน€เธฅเธเธ—เนเธฒเธข mask เนเธเธเธเธงเนเธฒเธ (เธฃเธญเธเธฃเธฑเธเธเธฃเธฃเธ—เธฑเธ”เธ—เธตเนเธฃเธงเธก DATE/TIME/APPR เนเธเธเธฃเธฃเธ—เธฑเธ”เน€เธ”เธตเธขเธง)
+            m = re.search(
+                r'(?:\*|X){2,}(?:[\s\*Xx]|[^\d\n]){0,40}?(\d{4})(?!\d)',
+                clean_text,
+                re.IGNORECASE,
+            )
+            last4 = _safe_last4(m.group(1) if m else None)
+
+        if not last4:
+            # 1) **** **** **** 5706 / *** *** **** 5706 (เธญเธขเนเธฒเธเธเนเธญเธข 2 เธเธฅเธธเนเธก mask เธเนเธญเธเน€เธฅเธ)
+            m = re.search(
+                r'(?:\*[\s\*โ€ขยท]*){2,}\b(\d{4})(?!\d)',
+                clean_text,
+            )
+            last4 = _safe_last4(m.group(1) if m else None)
+
+        if not last4:
+            # 1b) OCR เธญเนเธฒเธ X เนเธ—เธ *: XXXX XXXX 5706
+            m = re.search(
+                r'(?:\bX{3,4}\b\s*){2,}\b(\d{4})(?!\d)',
+                clean_text,
+                re.IGNORECASE,
+            )
+            last4 = _safe_last4(m.group(1) if m else None)
+
+        if not last4:
+            # 1c) เน€เธฅเธ 4 เธซเธฅเธฑเธเธ—เนเธฒเธขเธเธฃเธฃเธ—เธฑเธ”เธ—เธตเนเธกเธต mask เธเธเธเนเธญเธเธงเธฒเธก
+            for line in lines:
+                if not re.search(r'[\*Xx]{2,}', line):
+                    continue
+                # เธ–เนเธฒเน€เธเนเธเธเธฃเธฃเธ—เธฑเธ”เธ—เธตเนเธกเธต SALE/NON ETAX เนเธซเนเธญเธเธธเธเธฒเธ• เนเธกเนเธกเธต DATE/TIME/APPR เธเธ
+                if _line_toxic_for_last4(line) and not re.search(r'SALE\s+PTT|NON\s+ETAX|FLEET', line, re.IGNORECASE):
+                    continue
+                m = re.search(r'(?:\*|X){1,}[\s\*Xx]*(\d{4})(?!\d)', line, re.IGNORECASE)
+                if m:
+                    last4 = _safe_last4(m.group(1))
+                    if last4:
+                        break
+
+        if not last4:
+            # 2) เธเธฃเธฃเธ—เธฑเธ”เธฃเธฐเธเธธเน€เธฅเธเธเธฑเธ•เธฃเนเธ”เธขเธ•เธฃเธ
+            m = re.search(r'(?:CARD\s*(?:NO|NUMBER)?|เน€เธฅเธเธเธฑเธ•เธฃ)\s*[:\-]?\s*(?:\*+\s*){1,6}(\d{4})(?!\d)', clean_text, re.IGNORECASE)
+            last4 = _safe_last4(m.group(1) if m else None)
+
+        if not last4:
+            # 3) เน€เธฅเธ 4 เธ•เธฑเธงเธ—เธตเนเธญเธขเธนเนเธเธดเธ”เธเธณเธงเนเธฒ SALE PTT / NON ETAX (เนเธกเนเนเธเนเธ–เนเธฒเธเธฃเธฃเธ—เธฑเธ”เธกเธต APPR/TID/TIME)
+            for line in lines:
+                if not re.search(r'SALE\s+PTT|NON\s+ETAX', line, re.IGNORECASE):
+                    continue
+                m = re.search(
+                    r'(?<!\d)(\d{4})(?!\d)\s+(?:SALE\s+PTT|NON\s+ETAX)',
+                    line,
+                    re.IGNORECASE,
+                )
+                if m:
+                    last4 = _safe_last4(m.group(1))
+                    if last4:
+                        break
+                # OCR เธเธฒเธเธฃเธญเธเธงเธฒเธเน€เธฅเธเนเธงเนเธซเธฅเธฑเธ SALE/NON ETAX
+                m2 = re.search(
+                    r'(?:SALE\s+PTT|NON\s+ETAX).{0,24}?(?<!\d)(\d{4})(?!\d)',
+                    line,
+                    re.IGNORECASE,
+                )
+                if m2:
+                    last4 = _safe_last4(m2.group(1))
+                    if last4:
+                        break
+
+        if not last4:
+            # 4) เธซเธฒเนเธเธฅเนเธเธฃเธฃเธ—เธฑเธ” key words โ€” เธเนเธฒเธกเธเธฃเธฃเธ—เธฑเธ”เธ—เธตเนเธกเธตเธฃเธซเธฑเธชเธญเธเธธเธกเธฑเธ•เธด/เนเธ—เธฃเนเธ
+            for i, line in enumerate(lines):
+                if not re.search(r'SALE\s+PTT|NON\s+ETAX|FLEET|Fleet\s*\(|CARD', line, re.IGNORECASE):
+                    continue
+                if _line_toxic_for_last4(line):
+                    continue
+                nearby_lines = [lines[j] for j in range(max(0, i - 1), min(len(lines), i + 2))]
+                for nearby_line in nearby_lines:
+                    if _line_toxic_for_last4(nearby_line):
+                        continue
+                    # เธ–เนเธฒเธเธฃเธฃเธ—เธฑเธ”เธกเธต mask เนเธซเนเธเธฑเธเน€เธฅเธเธ—เนเธฒเธขเธเธฃเธฃเธ—เธฑเธ”เธเนเธญเธ
+                    if re.search(r'[\*Xx]{2,}', nearby_line):
+                        m = re.search(r'(?:\*|X){1,}[\s\*Xx]*(\d{4})\s*$', nearby_line, re.IGNORECASE)
+                        if m:
+                            last4 = _safe_last4(m.group(1))
+                            if last4:
+                                break
+                    if last4:
+                        break
+                    nums = re.findall(r'\b(\d{4})\b', nearby_line)
+                    for num in reversed(nums):
+                        good = _safe_last4(num)
+                        if good:
+                            last4 = good
+                            break
+                    if last4:
+                        break
+                if last4:
+                    break
+
+        if not last4:
+            # 5) เธเธฒเธ OCR เธงเธฒเธเน€เธฅเธเธเธฑเธ•เธฃเธ•เธฃเธเธเธญเธฅเธฑเธกเธเนเธฃเธฐเธขเธฐเธ—เธฒเธ
+            m = re.search(r'(?:เน€เธฅเธ)?เธฃเธฐเธขเธฐเธ—เธฒเธ\s*\(?\s*KM\s*\)?\s*:?\s*(\d{4})\b', clean_text, re.IGNORECASE)
+            last4 = _safe_last4(m.group(1) if m else None)
+
+        if not card_type:
+            card_type_patterns = [
+                r'CARD\s*TYPE\s*[:\-]?\s*(VISA|MASTER(?:CARD)?|JCB|UNIONPAY|FLEET(?:\s*CARD)?)',
+                r'\b(SALE\s+PTT\s+FLEET(?:\s+CARD)?)\b',
+                r'\b(PTT\s+FLEET(?:\s+CARD)?)\b',
+            ]
+            for pat in card_type_patterns:
+                m = re.search(pat, clean_text, re.IGNORECASE)
+                if m:
+                    card_type = re.sub(r'\s+', ' ', m.group(1).upper()).strip()
+                    break
+
+        if date and time_ and last4 and card_type:
+            break
+
+    # --- Amount: เธ”เธถเธเน€เธเธเธฒเธฐ TOTAL เนเธเธ conservative ---
+    # เธซเธฅเธฑเธเธเธฒเธฃ: เธ–เนเธฒเนเธกเนเธเธฑเธ”เน€เธเธเนเธซเนเธเธทเธ None เธ”เธตเธเธงเนเธฒเธเธทเธเธเนเธฒเธเธดเธ”เธเธฒเธ AVAILABLE BALANCE
+    text_norm = clean_text
+
+    def _reconcile_total_if_absurd_vs_balance(raw_amount: str, full_text: str) -> str:
+        """
+        Typhoon/OCR เธกเธฑเธเธญเนเธฒเธ 200.00 เน€เธเนเธ 200,000.00 (เนเธชเน comma + เธจเธนเธเธขเนเน€เธเธดเธ)
+        เธ–เนเธฒเธกเธต AVAILABLE BALANCE เธเธฃเธฃเธ—เธฑเธ”เน€เธ”เธตเธขเธงเธเธฑเธเนเธฅเธฐ TOTAL > balance เธเธฑเธ”เน€เธเธเน€เธเธดเธเนเธ
+        เนเธซเนเธฅเธญเธเนเธเน total/1000 เน€เธกเธทเนเธญเธซเธฒเธฃเธฅเธเธ•เธฑเธงเนเธฅเธฐเธขเธฑเธ <= balance
+        """
+        if not raw_amount or not full_text:
+            return raw_amount
+        try:
+            v_amt = float(str(raw_amount).replace(",", ""))
+        except ValueError:
+            return raw_amount
+        for line in full_text.split("\n"):
+            if not re.search(r"TOTAL\s*:?\s*THB", line, re.IGNORECASE):
+                continue
+            if not re.search(r"AVAILABLE\s+BALANCE", line, re.IGNORECASE):
+                continue
+            bm = re.search(
+                r"AVAILABLE\s+BALANCE\s+([\d,]+\.\d{2})",
+                line,
+                re.IGNORECASE,
+            )
+            if not bm:
+                continue
+            try:
+                v_bal = float(bm.group(1).replace(",", ""))
+            except ValueError:
+                continue
+            if v_bal <= 0 or v_amt <= v_bal:
+                return raw_amount
+            # เธขเธญเธ”เธเธทเนเธญเธ•เนเธญเธเนเธกเนเธกเธฒเธเธเธงเนเธฒเธขเธญเธ”เธเธเน€เธซเธฅเธทเธญ โ€” เธ–เนเธฒเธกเธฒเธเธเธงเนเธฒเธกเธฒเธ เนเธเธฅเธงเนเธฒเธญเนเธฒเธ TOTAL เธเธดเธ”
+            if v_amt < 1000:
+                return raw_amount
+            if v_amt % 1000 != 0:
+                return raw_amount
+            cand = v_amt / 1000.0
+            if cand < 1 or cand > 50_000:
+                return raw_amount
+            if cand > v_bal * 1.05:
+                return raw_amount
+            # เธเธฑเธเน€เธเธชเธเนเธฒเธขเธเธฃเธดเธเธซเธฅเธฑเธเธซเธกเธทเนเธ: เธ•เนเธญเธ "เนเธ•เนเธ" เธเธญเธชเธกเธเธงเธฃ (เน€เธเนเธ 200,000 เธเธฑเธ balance 5,500)
+            if v_amt <= 30 * v_bal:
+                return raw_amount
+            return f"{cand:.2f}"
+        # เธ–เนเธฒเนเธกเนเธเธเน€เธเธทเนเธญเธเนเธเธ—เธตเนเธ•เนเธญเธ reconcile (เน€เธเนเธ เนเธกเนเธกเธตเธ•เธฑเธงเน€เธฅเธ AVAILABLE BALANCE)
+        # เนเธซเนเธเธเธเนเธฒ TOTAL เธ•เธฒเธกเธ—เธตเนเธญเนเธฒเธเนเธ”เนเน€เธ”เธดเธก
+        return raw_amount
+
+    # 1) เธขเธถเธ”เธเธฃเธฃเธ—เธฑเธ” TOTAL เธเนเธญเธเน€เธชเธกเธญ
+    lines_local = text_norm.split('\n')
+    for i, line in enumerate(lines_local):
+        if not re.search(r'TOTAL', line, re.IGNORECASE):
+            continue
+
+        # เน€เธเธช "TOTAL ... AVAILABLE BALANCE 300.00 6,500.00" -> เน€เธญเธฒเธ•เธฑเธงเนเธฃเธ
+        if re.search(r'AVAILABLE\s+BALANCE', line, re.IGNORECASE):
+            nums_in_line = re.findall(r'([\d,]+\.\d{2})', line)
+            if len(nums_in_line) >= 2:
+                amount = nums_in_line[0]
+                break
+            # เน€เธเธช OCR เธ—เธฑเนเธงเนเธ: TOTAL : THB ** 500.00 AVAILABLE BALANCE (เนเธกเนเธกเธตเน€เธฅเธ balance เธ•เนเธญเธ—เนเธฒเธข)
+            one_total = re.search(
+                r'TOTAL\s*:?\s*THB[^\d\n]{0,24}([\d,]+\.\d{2})\s+AVAILABLE\s+BALANCE',
+                line,
+                re.IGNORECASE,
+            )
+            if one_total:
+                amount = one_total.group(1)
+                break
+            # เธ–เนเธฒเธกเธต AVAILABLE BALANCE เนเธ•เนเน€เธเธญเธ•เธฑเธงเน€เธฅเธเน€เธ”เธตเธขเธง เธกเธฑเธเน€เธเนเธ balance เธซเนเธฒเธกเนเธเนเน€เธเนเธ TOTAL
+            continue
+
+        # เน€เธเธช "TOTAL : THB 500.00"
+        nums_in_line = re.findall(r'([\d,]+\.\d{2})', line)
+        if nums_in_line:
+            amount = nums_in_line[0]
+            break
+
+        # เน€เธเธช TOTAL เธญเธขเธนเนเธเธฃเธฃเธ—เธฑเธ”เธเธ, เธ•เธฑเธงเน€เธฅเธเธญเธขเธนเนเธเธฃเธฃเธ—เธฑเธ”เธ–เธฑเธ”เนเธ (เนเธ•เนเธ•เนเธญเธเนเธกเนเนเธเนเธเธฃเธฃเธ—เธฑเธ” balance)
+        if i + 1 < len(lines_local):
+            next_line = lines_local[i + 1].strip()
+            if (
+                re.match(r'^[\d,]+\.\d{2}$', next_line)
+                and not re.search(r'AVAILABLE\s+BALANCE', next_line, re.IGNORECASE)
+            ):
+                amount = next_line
+                break
+
+    if not amount:
+        # เน€เธเธชเธ—เธตเน OCR เนเธขเธเธเธฃเธฃเธ—เธฑเธ”:
+        # TOTAL : THB ** CUSTOMER COPY **
+        # 1,100.00
+        # AVAILABLE BALANCE 5,070.00
+        # เนเธซเนเธ”เธถเธเธเธฃเธฃเธ—เธฑเธ”เธ–เธฑเธ”เธเธฒเธ TOTAL เน€เธเนเธเธขเธญเธ”เธเธทเนเธญ
+        split_total_match = re.search(
+            r'TOTAL\s*:?\s*THB[\s\S]{0,60}?CUSTOMER\s+COPY[\s\S]{0,40}?\n\s*([\d,]+\.\d{2})\s*\n\s*AVAILABLE\s+BALANCE\s+([\d,]+\.\d{2})',
+            text_norm,
+            re.IGNORECASE,
+        )
+        if split_total_match:
+            try:
+                v_total = float(split_total_match.group(1).replace(',', ''))
+                v_avail = float(split_total_match.group(2).replace(',', ''))
+                if 1 <= v_total <= 50_000 and v_avail >= v_total:
+                    amount = split_total_match.group(1)
+            except ValueError:
+                pass
+
+    if not amount:
+        # เน€เธเธชเธ—เธตเน OCR เนเธขเธเธเธฃเธฃเธ—เธฑเธ”เนเธฅเธฐเนเธกเนเธกเธต AVAILABLE BALANCE เธ•เนเธญเธ—เนเธฒเธข:
+        # TOTAL : THB ** CUSTOMER COPY **
+        # 920.00
+        split_total_simple = re.search(
+            r'TOTAL\s*:?\s*THB[\s\S]{0,40}?CUSTOMER\s+COPY[\s\S]{0,20}?\n\s*([\d,]+\.\d{2})',
+            text_norm,
+            re.IGNORECASE,
+        )
+        if split_total_simple:
+            try:
+                v = float(split_total_simple.group(1).replace(',', ''))
+                if 1 <= v <= 50_000:
+                    amount = split_total_simple.group(1)
+            except ValueError:
+                pass
+
+    if not amount:
+        # เน€เธเธช table OCR: "TOTAL : THB AVAILABLE BALANCE" เนเธฅเนเธงเธ•เธฒเธกเธ”เนเธงเธขเธ•เธฑเธงเน€เธฅเธ 2 เธ•เธฑเธง
+        # เนเธซเนเธขเธถเธ”เธ•เธฑเธงเนเธฃเธเน€เธเนเธ TOTAL
+        table_pair = re.search(
+            r'TOTAL\s*:?\s*THB\s+AVAILABLE\s+BALANCE[\s\S]{0,120}?([\d,]+\.\d{2})\s+([\d,]+\.\d{2})',
+            text_norm,
+            re.IGNORECASE,
+        )
+        if table_pair:
+            try:
+                v1 = float(table_pair.group(1).replace(',', ''))
+                if 1 <= v1 <= 50_000:
+                    amount = table_pair.group(1)
+            except ValueError:
+                pass
+
+    if not amount:
+        # เน€เธเธช OCR เธ—เธฑเนเธงเนเธ:
+        # TOTAL : THB ** CUSTOMER COPY **
+        # AVAILABLE BALANCE 300.00 6,500.00
+        # เนเธซเนเธขเธถเธ”เน€เธฅเธเธ•เธฑเธงเนเธฃเธเน€เธเนเธ TOTAL
+        cc_avail_pair = re.search(
+            r'TOTAL\s*:?\s*THB[\s\S]{0,80}?CUSTOMER\s+COPY[\s\S]{0,80}?AVAILABLE\s+BALANCE\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})',
+            text_norm,
+            re.IGNORECASE,
+        )
+        if cc_avail_pair:
+            try:
+                v1 = float(cc_avail_pair.group(1).replace(',', ''))
+                v2 = float(cc_avail_pair.group(2).replace(',', ''))
+                # เธชเนเธงเธเนเธซเธเนเธฃเธนเธเนเธเธเธเธตเนเน€เธฅเธเนเธฃเธเธเธทเธญ TOTAL เน€เธฅเธเธ—เธตเนเธชเธญเธเธเธทเธญ BALANCE
+                if 1 <= v1 <= 50_000 and v2 >= v1:
+                    amount = cc_avail_pair.group(1)
+            except ValueError:
+                pass
+
+    if amount:
+        amount = _reconcile_total_if_absurd_vs_balance(amount, text_norm)
+
+    return {
+        "merchant": merchant,
+        "date": date,
+        "time": time_,
+        "last4": last4,
+        "amount": amount,
+        "cardType": card_type,
+    }
+
+
+def _slip_data_score(values: dict) -> int:
+    """เนเธซเนเธเธฐเนเธเธเธเธงเธฒเธกเธเธฃเธเธ–เนเธงเธเธเธญเธเธเนเธญเธกเธนเธฅเธชเธฅเธดเธ เน€เธเธทเนเธญเน€เธฅเธทเธญเธ OCR เธฃเธญเธเธ—เธตเนเธ”เธตเธ—เธตเนเธชเธธเธ”"""
+    score = 0
+    if values.get("amount"):
+        score += 4
+    if values.get("date"):
+        score += 4
+    if values.get("last4"):
+        score += 3
+    if values.get("cardType"):
+        score += 2
+    if values.get("merchant"):
+        score += 2
+    if values.get("time"):
+        score += 1
+    return score
+
+
+def _amount_has_total_evidence(raw_text: str, amount: str) -> bool:
+    """เธขเธญเธกเธฃเธฑเธเธขเธญเธ”เธเธฒเธ OCR เธชเธณเธฃเธญเธเน€เธเธเธฒเธฐเน€เธกเธทเนเธญเธกเธตเธซเธฅเธฑเธเธเธฒเธ TOTAL เธเธนเนเธขเธญเธ”เธเธฑเนเธเธเธฃเธดเธ"""
+    if not raw_text or not amount:
+        return False
+    text = str(raw_text)
+    amt = re.escape(str(amount))
+    # เนเธซเนเธขเธทเธ”เธซเธขเธธเนเธเธเธถเนเธ: เธขเธญเธกเธฃเธฑเธเนเธกเนเธเธฐเธญเธขเธนเนเธเธเธฅเธฐเธเธฃเธฃเธ—เธฑเธ” เธซเธฃเธทเธญเธกเธตเธเนเธญเธเธงเธฒเธก CUSTOMER COPY เธเธฑเนเธ (เธฃเธฐเธขเธฐเนเธกเนเน€เธเธดเธ 60-80 เธ•เธฑเธงเธญเธฑเธเธฉเธฃ)
+    if re.search(rf"TOTAL\s*:?\s*THB[\s\S]{0,80}?{amt}", text, re.IGNORECASE):
+        return True
+    return False
+
+
+def _build_page_quality(ocr_text: str, values: dict) -> dict:
+    text = (ocr_text or "").upper()
+    v = values or {}
+
+    def field_score(name: str):
+        val = v.get(name)
+        if not val:
+            return 0.0, "เนเธกเนเธเธเธเนเธฒ"
+
+        if name == "date":
+            if re.search(r"DATE\s*:?\s*\d{2}/\d{2}/\d{2,4}", text):
+                return 0.95, "เธเธ DATE เธเธฑเธ”เน€เธเธ"
+            if re.search(r"\d{2}/\d{2}/\d{2,4}", text):
+                return 0.75, "เธเธเธฃเธนเธเนเธเธเธงเธฑเธเธ—เธตเนเธ—เธฑเนเธงเนเธ"
+            return 0.55, "เธ”เธถเธเนเธ”เนเนเธ•เนเธซเธฅเธฑเธเธเธฒเธเนเธเธเนเธญเธเธงเธฒเธกเธ•เนเธณ"
+
+        if name == "time":
+            if re.search(r"TIME\s*:?\s*\d{2}:\d{2}(?::\d{2})?", text):
+                return 0.95, "เธเธ TIME เธเธฑเธ”เน€เธเธ"
+            if re.search(r"\d{2}:\d{2}(?::\d{2})?", text):
+                return 0.7, "เธเธเธฃเธนเธเนเธเธเน€เธงเธฅเธฒ"
+            return 0.5, "เธ”เธถเธเนเธ”เนเนเธ•เนเธซเธฅเธฑเธเธเธฒเธเนเธเธเนเธญเธเธงเธฒเธกเธ•เนเธณ"
+
+        if name == "last4":
+            if re.search(r"(?:\*[\s\*โ€ขยท]*){2,}\b\d{4}(?!\d)", text):
+                return 0.95, "เธเธเน€เธฅเธ 4 เธ•เธฑเธงเธเธนเนเธเธฑเธ mask"
+            if re.search(r"(?:\bX{3,4}\b\s*){2,}\b\d{4}(?!\d)", text):
+                return 0.92, "เธเธเน€เธฅเธ 4 เธ•เธฑเธงเธเธนเนเธเธฑเธ mask (X)"
+            if re.search(r"\*+\s*\*+[\s*]*\d{4}(?!\d)", text):
+                return 0.95, "เธเธเน€เธฅเธ 4 เธ•เธฑเธงเธเธนเนเธเธฑเธ mask"
+            if re.search(r"(SALE\s+PTT|NON\s+ETAX).{0,20}\d{4}|\d{4}.{0,20}(SALE\s+PTT|NON\s+ETAX)", text):
+                return 0.8, "เธเธเน€เธฅเธ 4 เธ•เธฑเธงเนเธเธฅเนเธเธฃเธฃเธ—เธฑเธ”เธฃเธฒเธขเธเธฒเธฃ"
+            return 0.6, "เน€เธฅเธ 4 เธ•เธฑเธงเธกเธฒเธเธฒเธ fallback / OCR เธชเธณเธฃเธญเธ"
+
+        if name == "merchant":
+            if re.search(r"PTTST\.D|PTTRM|STATION\s+D", text):
+                return 0.9, "เธเธ prefix เธฃเนเธฒเธเธเธฑเธ”เน€เธเธ"
+            return 0.65, "เธเธทเนเธญเธฃเนเธฒเธเธกเธฒเธเธฒเธ fallback"
+
+        if name == "amount":
+            amount_text = str(val)
+            if re.search(rf"TOTAL\s*:?\s*THB[^\n]{{0,24}}{re.escape(amount_text)}", text):
+                return 0.95, "เธเธ TOTAL เธเธนเนเธขเธญเธ”เนเธ”เธขเธ•เธฃเธ"
+            if re.search(
+                rf"TOTAL\s*:?\s*THB[\s\S]{{0,80}}?AVAILABLE\s+BALANCE[\s\S]{{0,40}}?{re.escape(amount_text)}",
+                text,
+                re.IGNORECASE,
+            ):
+                return 0.9, "เธเธเธฃเธนเธเนเธเธ TOTAL/AVAILABLE BALANCE เนเธเธเธ•เธฒเธฃเธฒเธ"
+            if re.search(
+                rf"TOTAL\s*:?\s*THB[\s\S]{{0,120}}?{re.escape(amount_text)}",
+                text,
+                re.IGNORECASE,
+            ):
+                return 0.85, "เธเธ TOTAL เธเธนเนเธขเธญเธ”เนเธเธซเธฅเธฒเธขเธเธฃเธฃเธ—เธฑเธ”"
+            if re.search(r"TOTAL\s*:?\s*THB.*CUSTOMER\s+COPY", text):
+                return 0.75, "เธขเธญเธ”เธกเธฒเธเธฒเธเน€เธเธช TOTAL/CUSTOMER COPY"
+            if re.search(r"TOTAL", text):
+                return 0.7, "เธเธ TOTAL เนเธ•เนเนเธเธฃเธเธชเธฃเนเธฒเธ OCR เน€เธเธตเนเธขเธ"
+            return 0.5, "เธ”เธถเธเธขเธญเธ”เธเธฒเธ fallback"
+
+        if name == "cardType":
+            if re.search(r"CARD\s*TYPE|PTT\s+FLEET|SALE\s+PTT\s+FLEET", text):
+                return 0.85, "เธเธเธเธฃเธฐเน€เธ เธ—เธเธฑเธ•เธฃ"
+            return 0.55, "เนเธกเนเธเธเธเธฃเธฐเน€เธ เธ—เธเธฑเธ•เธฃเธเธฑเธ”เน€เธเธ"
+
+        return 0.5, "เธ”เธถเธเนเธ”เน"
+
+    field_conf = {}
+    reasons = []
+    for key in ("merchant", "date", "time", "last4", "amount", "cardType"):
+        conf, reason = field_score(key)
+        field_conf[key] = round(conf, 2)
+        if conf < 0.75:
+            reasons.append(f"{key}: {reason}")
+
+    confidence = round(sum(field_conf.values()) / len(field_conf), 2)
+    needs_review = confidence < 0.78 or any(vv < 0.7 for vv in field_conf.values())
+    return {
+        "confidence": confidence,
+        "field_confidence": field_conf,
+        "needs_review": needs_review,
+        "reasons": reasons[:5],
+    }
+
+
+def _images_from_upload_bytes(filename: str, content: bytes) -> list:
+    """
+    เธ”เธถเธเธฃเธนเธเธ เธฒเธเธเธฒเธเนเธเธฅเนเธ—เธตเนเธญเธฑเธเนเธซเธฅเธ” - เธฃเธญเธเธฃเธฑเธเธซเธฅเธฒเธขเธซเธเนเธฒ (PDF)
+    Returns: list of PIL Image objects (1 per page)
+    """
+    lower = (filename or "").lower()
+    if lower.endswith(".pdf"):
+        doc = fitz.open(stream=content, filetype="pdf")
+        if doc.page_count < 1:
+            raise ValueError("Empty PDF")
+        images = []
+        for page_num in range(doc.page_count):
+            page = doc.load_page(page_num)
+            pix = page.get_pixmap(dpi=SLIP_PDF_DPI, alpha=False)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            images.append(img)
+        doc.close()
+        return images
+
+    # เนเธเธฅเนเธฃเธนเธเธ เธฒเธ = 1 เธซเธเนเธฒ
+    try:
+        img = Image.open(io.BytesIO(content))
+        # เธฃเธญเธเธฃเธฑเธ EXIF orientation (เธเธฃเธ“เธตเธ–เนเธฒเธขเนเธฅเนเธงเธเธฅเนเธญเธเธเธฑเธเธ—เธถเธเธ—เธดเธจเธ—เธฒเธเธเธดเธ”)
+        img = ImageOps.exif_transpose(img)
+        return [img.convert("RGB")]
+    except Exception as e:
+        raise ValueError(f"Unsupported file type: {filename}") from e
+
+
+def _pdf_has_text_layer(content: bytes) -> bool:
+    """เธ•เธฃเธงเธเน€เธฃเนเธงเน เธงเนเธฒ PDF เธกเธต text layer เธซเธฃเธทเธญเนเธกเน"""
+    try:
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            for page in pdf.pages[:3]:
+                txt = (page.extract_text() or "").strip()
+                if txt:
+                    return True
+        return False
+    except Exception:
+        return False
+
+
+def _pdf_texts_from_bytes(content: bytes) -> list[str]:
+    texts = []
+    with pdfplumber.open(io.BytesIO(content)) as pdf:
+        for page in pdf.pages:
+            txt = (page.extract_text() or "").strip()
+            texts.append(txt)
+    return texts
+
+
+def _ocrmypdf_add_text_layer(content: bytes, lang: str = "eng") -> tuple[bytes | None, list[str]]:
+    """
+    เนเธเธฅเธ PDF เธชเนเธเธ -> searchable PDF เธ”เนเธงเธข OCRmyPDF (eng only)
+    เธเธทเธ (converted_pdf_bytes_or_none, page_texts)
+    """
+    # เนเธเน python -m ocrmypdf เธเนเธญเธ (เนเธกเนเธ•เนเธญเธเธเธถเนเธ PATH เธเธญเธ ocrmypdf.exe)
+    ocrmypdf_cmd = [sys.executable, "-m", "ocrmypdf"]
+    can_run = True
+    try:
+        probe = subprocess.run(
+            ocrmypdf_cmd + ["--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if probe.returncode != 0:
+            can_run = False
+    except Exception:
+        can_run = False
+    if not can_run and shutil.which("ocrmypdf") is None:
+        print("โ  OCRmyPDF not available; skip text-layer conversion.")
+        return None, []
+    if not can_run:
+        ocrmypdf_cmd = ["ocrmypdf"]
+
+    tmp_dir = tempfile.mkdtemp(prefix="fuelverify_ocrmypdf_")
+    try:
+        in_pdf = os.path.join(tmp_dir, "input.pdf")
+        out_pdf = os.path.join(tmp_dir, "output_textlayer.pdf")
+        sidecar = os.path.join(tmp_dir, "sidecar.txt")
+        with open(in_pdf, "wb") as f:
+            f.write(content)
+
+        cmd = ocrmypdf_cmd + [
+            "--skip-text",
+            "--optimize",
+            "0",
+            "-l",
+            lang,
+            "--sidecar",
+            sidecar,
+            in_pdf,
+            out_pdf,
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            print(f"โ  OCRmyPDF failed ({proc.returncode}).")
+            if proc.stderr:
+                print(f"OCRmyPDF stderr: {proc.stderr[:1500]}")
+            return None, []
+
+        with open(out_pdf, "rb") as f:
+            out_bytes = f.read()
+        page_texts = _pdf_texts_from_bytes(out_bytes)
+
+        # debug: เนเธเธงเนเธเนเธญเธเธงเธฒเธกเธ—เธตเนเนเธ”เนเธเธฒเธ text-layer เธ•เนเธญเธซเธเนเธฒ (เธ•เธฑเธ”เนเธซเนเธชเธฑเนเธ)
+        print("=== OCRmyPDF text-layer debug (eng only) ===")
+        for i, txt in enumerate(page_texts, start=1):
+            compact = re.sub(r"\s+", " ", (txt or "")).strip()
+            if len(compact) > 220:
+                compact = compact[:220] + " ..."
+            print(f"[page {i}] {compact if compact else '(empty)'}")
+        print("=== end OCRmyPDF text-layer debug ===")
+
+        return out_bytes, page_texts
+    except Exception as e:
+        print(f"OCRmyPDF conversion error: {e}")
+        return None, []
+    finally:
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _ilovepdf_add_text_layer(content: bytes, filename: str = "input.pdf", lang: str = "eng") -> tuple[bytes | None, list[str]]:
+    """
+    เนเธเธฅเธ PDF เธ”เนเธงเธข iLovePDF API (pdfocr) เน€เธเธทเนเธญเน€เธเธดเนเธก text layer
+    เธเธทเธ (converted_pdf_bytes_or_none, page_texts)
+    """
+    if not ILOVEPDF_PUBLIC_KEY:
+        print("โ  iLovePDF: missing ILOVEPDF_PUBLIC_KEY.")
+        return None, []
+
+    token = None
+    try:
+        auth_resp = requests.post(
+            "https://api.ilovepdf.com/v1/auth",
+            data={"public_key": ILOVEPDF_PUBLIC_KEY},
+            timeout=ILOVEPDF_TIMEOUT_SEC,
+        )
+        auth_resp.raise_for_status()
+        token = (auth_resp.json() or {}).get("token")
+    except Exception as e:
+        print(f"โ  iLovePDF auth failed: {e}")
+        return None, []
+
+    if not token:
+        print("โ  iLovePDF auth failed: token missing.")
+        return None, []
+
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        start_url = f"https://api.ilovepdf.com/v1/start/pdfocr/{ILOVEPDF_REGION}"
+        start_resp = requests.get(start_url, headers=headers, timeout=ILOVEPDF_TIMEOUT_SEC)
+        if start_resp.status_code >= 400:
+            # เธเธฒเธ endpoint เธญเธเธธเธเธฒเธ• POST
+            start_resp = requests.post(start_url, headers=headers, timeout=ILOVEPDF_TIMEOUT_SEC)
+        start_resp.raise_for_status()
+        start_json = start_resp.json() or {}
+        server = start_json.get("server")
+        task = start_json.get("task")
+        if not server or not task:
+            print("โ  iLovePDF start failed: missing server/task.")
+            return None, []
+
+        upload_resp = requests.post(
+            f"https://{server}/v1/upload",
+            headers=headers,
+            data={"task": task},
+            files={"file": (filename, content, "application/pdf")},
+            timeout=ILOVEPDF_TIMEOUT_SEC,
+        )
+        upload_resp.raise_for_status()
+        uploaded = upload_resp.json() or {}
+        server_filename = uploaded.get("server_filename")
+        if not server_filename:
+            print("โ  iLovePDF upload failed: server_filename missing.")
+            return None, []
+
+        process_payload = {
+            "task": task,
+            "tool": "pdfocr",
+            "files": [{"server_filename": server_filename, "filename": filename}],
+            "ocr_languages": [lang],
+        }
+        process_resp = requests.post(
+            f"https://{server}/v1/process",
+            headers={**headers, "Content-Type": "application/json"},
+            json=process_payload,
+            timeout=ILOVEPDF_TIMEOUT_SEC,
+        )
+        process_resp.raise_for_status()
+
+        download_resp = requests.get(
+            f"https://{server}/v1/download/{task}",
+            headers=headers,
+            timeout=ILOVEPDF_TIMEOUT_SEC,
+        )
+        download_resp.raise_for_status()
+        out_bytes = download_resp.content
+        ctype = (download_resp.headers.get("Content-Type") or "").lower()
+        # เธเธฒเธเน€เธเธชเนเธ”เน zip เธเธฅเธฑเธเธกเธฒ
+        if "zip" in ctype or out_bytes[:4] == b"PK\x03\x04":
+            with zipfile.ZipFile(io.BytesIO(out_bytes)) as zf:
+                pdf_names = [n for n in zf.namelist() if n.lower().endswith(".pdf")]
+                if not pdf_names:
+                    print("โ  iLovePDF download zip has no PDF.")
+                    return None, []
+                out_bytes = zf.read(pdf_names[0])
+
+        page_texts = _pdf_texts_from_bytes(out_bytes)
+        print("=== iLovePDF text-layer debug (eng only) ===")
+        for i, txt in enumerate(page_texts, start=1):
+            compact = re.sub(r"\s+", " ", (txt or "")).strip()
+            if len(compact) > 220:
+                compact = compact[:220] + " ..."
+            print(f"[page {i}] {compact if compact else '(empty)'}")
+        print("=== end iLovePDF text-layer debug ===")
+        return out_bytes, page_texts
+    except Exception as e:
+        print(f"โ  iLovePDF convert failed: {e}")
+        return None, []
+
+
+def _build_textlayer_texts_from_images(images: list[Image.Image]) -> list[str]:
+    """
+    เธชเธฃเนเธฒเธ OCR text เธ•เนเธญเธซเธเนเธฒ (เน€เธชเธกเธทเธญเธ text layer) เธเธฒเธเธ เธฒเธ PDF เธชเนเธเธ
+    เน€เธเธทเนเธญเนเธเนเน€เธเนเธเธเนเธญเธกเธนเธฅเธ•เธฑเนเธเธ•เนเธเธเนเธญเธ Typhoon
+    """
+    texts = []
+    for img in images:
+        try:
+            gray = ImageOps.autocontrast(img.convert("L"))
+            w, h = gray.size
+            if w < 1200:
+                scale = 1200.0 / w
+                try:
+                    resample = Image.Resampling.LANCZOS
+                except AttributeError:
+                    resample = Image.LANCZOS
+                gray = gray.resize((int(w * scale), int(h * scale)), resample)
+
+            raw = ""
+            try:
+                raw = (pytesseract.image_to_string(gray, lang="eng", config="--psm 6") or "").strip()
+            except Exception:
+                raw = ""
+            if not raw:
+                try:
+                    raw = (pytesseract.image_to_string(gray, lang="eng+tha", config="--psm 6") or "").strip()
+                except Exception:
+                    raw = ""
+            texts.append(raw)
+        except Exception:
+            texts.append("")
+    return texts
+
+
+def _card_hint_from_filename(filename: str) -> str:
+    m = re.search(r"\bVIP\s*([0-9]+)\b", (filename or ""), re.IGNORECASE)
+    if m:
+        return f"VIP{m.group(1)}"
+    return "UNKNOWN"
+
+
+def _print_page_debug(page_no: int, values: dict, card_hint: str):
+    v = values or {}
+    amount = v.get("amount")
+    amount_text = f"TOTAL THB {amount}" if amount else "-"
+    print(f"Page:{page_no}")
+    print(f"Merchant:{v.get('merchant') or '-'}")
+    print(f"Date:{v.get('date') or '-'}")
+    print(f"Last4:{v.get('last4') or '-'}")
+    print(f"Amount:{amount_text}")
+    print(f"Card:{card_hint}")
+
+
+def _tesseract_slip_supplement(img: Image.Image) -> tuple:
+    """
+    เธญเนเธฒเธเธชเธฅเธดเธเธ”เนเธงเธข Tesseract เนเธเธเธซเธฅเธฒเธขเธกเธธเธก/เธซเธฅเธฒเธขเนเธซเธกเธ” เนเธฅเนเธงเน€เธฅเธทเธญเธเธเธฅเธ—เธตเนเธ”เธตเธ—เธตเนเธชเธธเธ”
+    เธเธทเธ (raw_text, parsed_dict)
+    """
+    try:
+        gray = img.convert("L")
+        gray = ImageOps.autocontrast(gray)
+        w, h = gray.size
+        if w < 1100:
+            scale = 1100.0 / w
+            try:
+                resample = Image.Resampling.LANCZOS
+            except AttributeError:
+                resample = Image.LANCZOS
+            gray = gray.resize((int(w * scale), int(h * scale)), resample)
+        best_raw = ""
+        best_parsed = {}
+        best_score = -1
+
+        def _run_pass(pass_name: str, lang: str, config: str):
+            nonlocal best_raw, best_parsed, best_score
+            for angle in (0, 90, 180, 270):
+                variant = gray if angle == 0 else gray.rotate(angle, expand=True)
+                try:
+                    raw = (pytesseract.image_to_string(variant, lang=lang, config=config) or "").strip()
+                except Exception:
+                    raw = ""
+                if not raw:
+                    continue
+                parsed = _parse_slip_text(raw)
+                score = _slip_data_score(parsed)
+                if score > best_score:
+                    best_raw = raw
+                    best_parsed = parsed
+                    best_score = score
+                    print(
+                        f"โ… Tesseract best updated: pass={pass_name} angle={angle}ยฐ "
+                        f"score={score}, values={best_parsed}"
+                    )
+                if score >= 15:
+                    return
+
+        # pass 1: เน€เธฃเนเธงเธชเธธเธ”เธเนเธญเธ
+        _run_pass("eng-psm6", "eng", "--psm 6")
+        # pass 2: เธ–เนเธฒเธขเธฑเธเธญเนเธญเธ เธเนเธญเธขเน€เธเธดเธ”เนเธ—เธข
+        if best_score < 12:
+            _run_pass("eng+tha-psm6", "eng+tha", "--psm 6")
+        # pass 3: เธ–เนเธฒเธขเธฑเธเธญเนเธญเธเธญเธตเธ เธฅเธญเธเนเธซเธกเธ” sparse text
+        if best_score < 10:
+            _run_pass("eng+tha-psm11", "eng+tha", "--psm 11")
+
+        if not best_raw:
+            return "", {}
+        return best_raw, best_parsed
+    except Exception as e:
+        print(f"Tesseract slip supplement error: {e}")
+        return "", {}
+
+
+def _tesseract_slip_roi_boost(img: Image.Image) -> tuple:
+    """
+    OCR เน€เธเธเธฒเธฐเนเธเธเธชเธณเธเธฑเธเธเธญเธเธชเธฅเธดเธ (เธเธฃเธฃเธ—เธฑเธ”เน€เธฅเธเธเธฑเธ•เธฃ/เนเธเธ TOTAL) เน€เธเธทเนเธญเธฅเธ”เน€เธเธชเธญเนเธฒเธเธ—เธฑเนเธเธ เธฒเธเนเธฅเนเธงเธซเธฅเธธเธ”
+    เธเธทเธ (raw_text_concat, parsed_merged)
+    """
+    try:
+        rgb = img.convert("RGB")
+        w, h = rgb.size
+        rois = [
+            # เนเธเธเธเธฃเธฃเธ—เธฑเธ”เน€เธฅเธเธเธฑเธ•เธฃเนเธฅเธฐเธเธฃเธฃเธ—เธฑเธ”เธฃเธฒเธขเธเธฒเธฃ
+            rgb.crop((0, int(h * 0.45), w, int(h * 0.80))),
+            # เนเธเธเธขเธญเธ” TOTAL / AVAILABLE BALANCE เธ”เนเธฒเธเธฅเนเธฒเธ
+            rgb.crop((0, int(h * 0.68), w, h)),
+            # เนเธเธเธเธงเนเธฒเธเธชเนเธงเธเธฅเนเธฒเธเธ—เธฑเนเธเธซเธกเธ” (fallback)
+            rgb.crop((0, int(h * 0.40), w, h)),
+        ]
+        merged = {
+            "merchant": None,
+            "date": None,
+            "time": None,
+            "last4": None,
+            "amount": None,
+            "cardType": None,
+        }
+        texts = []
+        for i, roi in enumerate(rois, start=1):
+            raw, parsed = _tesseract_slip_supplement(roi)
+            if raw:
+                texts.append(raw)
+            if parsed:
+                for k in merged:
+                    if merged[k] is None and parsed.get(k) is not None:
+                        merged[k] = parsed[k]
+            if merged.get("last4") and merged.get("amount"):
+                break
+        raw_text = "\n".join(t for t in texts if t).strip()
+        return raw_text, merged
+    except Exception as e:
+        print(f"Tesseract ROI boost error: {e}")
+        return "", {}
+
+
+def _ocr_single_image(
+    img: Image.Image,
+    api_url: str,
+    api_key: str,
+    pre_ocr_text: str = "",
+    breaker_state: dict | None = None,
+    breaker_lock: threading.Lock | None = None,
+) -> dict:
+    """
+    OCR เธฃเธนเธเธ เธฒเธ 1 เธซเธเนเธฒ เธเนเธฒเธ Typhoon OCR API
+    เธ–เนเธฒเธญเนเธฒเธเนเธกเนเธเธฃเธ เธเธฐเธฅเธญเธเนเธซเธกเนเธชเธนเธเธชเธธเธ” 5 เธเธฃเธฑเนเธ เนเธฅเนเธงเน€เธญเธฒเธเนเธฒเธ”เธตเธ—เธตเนเธชเธธเธ”เธเธฒเธเธ—เธธเธเธฃเธญเธเธกเธฒเธฃเธงเธก
+    Returns: {"image": base64, "values": {...}, "highlights": {...}}
+    """
+    import requests
+
+    # เนเธเธฅเธเธ เธฒเธเน€เธเนเธ base64 เธชเธณเธซเธฃเธฑเธ preview เน€เธฃเธดเนเธกเธ•เนเธ
+    buffered = io.BytesIO()
+    img.save(buffered, format="JPEG", quality=85)
+    img_b64 = base64.b64encode(buffered.getvalue()).decode("ascii")
+
+    img_rgb = img.convert("RGB")
+    # เธ—เธณเนเธซเนเธเธญเธเธ—เธฃเธฒเธชเธ•เนเธ”เธตเธเธถเนเธเธเนเธญเธ OCR (เธเนเธงเธขเธเธฃเธ“เธตเธฃเธนเธเธเธฒเธ/เนเธชเธเนเธกเนเธชเธกเนเธณเน€เธชเธกเธญ)
+    img_rgb = ImageOps.autocontrast(img_rgb)
+
+    # เธเนเธฒเธฃเธงเธกเธเธฒเธเธ—เธธเธเธฃเธญเธ (เน€เธญเธฒเนเธงเนเน€เธ•เธดเธกเธเนเธญเธเธ—เธตเนเธซเธฒเธข)
+    merged_data = {
+        "merchant": None,
+        "date": None,
+        "time": None,
+        "last4": None,
+        "amount": None,
+        "cardType": None,
+    }
+
+    # เน€เธเนเธ "เธเธฅเธฃเธญเธเน€เธ”เธตเธขเธงเธ—เธตเนเธ”เธตเธ—เธตเนเธชเธธเธ”" เน€เธเธทเนเธญเนเธซเนเธ เธฒเธเธเธฃเธตเธงเธดเธงเธเธฑเธเธเนเธญเธกเธนเธฅเธกเธฒเธเธฒเธเธฃเธญเธเน€เธ”เธตเธขเธงเธเธฑเธ
+    best_attempt_data = {
+        "merchant": None,
+        "date": None,
+        "time": None,
+        "last4": None,
+        "amount": None,
+        "cardType": None,
+    }
+    best_img_b64 = img_b64
+    best_ocr_text = ""
+    best_score = -1
+    best_angle = 0
+    pre_parsed = _parse_slip_text(pre_ocr_text) if pre_ocr_text else {}
+
+    max_retries = max(1, min(8, SLIP_TYPHOON_MAX_RETRIES))
+
+    def _mark_typhoon_ok():
+        if breaker_state is None:
+            return
+        if breaker_lock:
+            with breaker_lock:
+                breaker_state["fail_streak"] = 0
+                breaker_state["open"] = False
+        else:
+            breaker_state["fail_streak"] = 0
+            breaker_state["open"] = False
+
+    def _mark_typhoon_fail():
+        if breaker_state is None:
+            return
+        if breaker_lock:
+            with breaker_lock:
+                breaker_state["fail_streak"] = int(breaker_state.get("fail_streak", 0)) + 1
+                if breaker_state["fail_streak"] >= SLIP_TYPHOON_FAIL_STREAK_BREAKER:
+                    breaker_state["open"] = True
+        else:
+            breaker_state["fail_streak"] = int(breaker_state.get("fail_streak", 0)) + 1
+            if breaker_state["fail_streak"] >= SLIP_TYPHOON_FAIL_STREAK_BREAKER:
+                breaker_state["open"] = True
+
+    def _is_breaker_open() -> bool:
+        if breaker_state is None:
+            return False
+        if breaker_lock:
+            with breaker_lock:
+                return bool(breaker_state.get("open"))
+        return bool(breaker_state.get("open"))
+
+    def _score(ai_data: dict) -> int:
+        # เนเธซเนเธเนเธฒเธเนเธณเธซเธเธฑเธเธเธฑเธเธเธดเธฅเธ”เนเธชเธณเธเธฑเธเธเนเธญเธ: amount/date/last4
+        score = 0
+        if ai_data.get("amount"):
+            score += 4
+        if ai_data.get("date"):
+            score += 4
+        if ai_data.get("last4"):
+            score += 3
+        if ai_data.get("cardType"):
+            score += 2
+        if ai_data.get("merchant"):
+            score += 2
+        if ai_data.get("time"):
+            score += 1
+        return score
+
+    def _typhoon_ocr_text(variant: Image.Image) -> str:
+        if _is_breaker_open():
+            return ""
+        img_bytes = io.BytesIO()
+        variant.save(img_bytes, format="JPEG", quality=85)
+        img_bytes.seek(0)
+        headers = {"Authorization": f"Bearer {api_key}"}
+        files = {"file": ("slip.jpg", img_bytes, "image/jpeg")}
+        data = {"model": "typhoon-ocr"}
+        response = requests.post(
+            api_url,
+            headers=headers,
+            files=files,
+            data=data,
+            timeout=SLIP_TYPHOON_TIMEOUT_SEC,
+        )
+        if response.status_code != 200:
+            print(f"Typhoon OCR API Error (status {response.status_code}): {response.text}")
+            _mark_typhoon_fail()
+            return ""
+        response.raise_for_status()
+        result_json = response.json()
+        try:
+            text = result_json["results"][0]["message"]["choices"][0]["message"]["content"]
+            if text:
+                _mark_typhoon_ok()
+            else:
+                _mark_typhoon_fail()
+            return text
+        except (KeyError, IndexError):
+            if "text" in result_json:
+                text = result_json["text"]
+                if text:
+                    _mark_typhoon_ok()
+                else:
+                    _mark_typhoon_fail()
+                return text
+            if "choices" in result_json:
+                text = result_json["choices"][0]["message"]["content"]
+                if text:
+                    _mark_typhoon_ok()
+                else:
+                    _mark_typhoon_fail()
+                return text
+            import json
+            print(
+                "Typhoon OCR returned 200 but no extractable OCR text; "
+                f"keys={list(result_json.keys())}"
+            )
+            _mark_typhoon_fail()
+            return json.dumps(result_json, ensure_ascii=False)
+
+    def _apply_typhoon_result(ocr_text: str, variant: Image.Image, used_angle: int, log_prefix: str) -> dict:
+        nonlocal best_score, best_attempt_data, best_ocr_text, best_img_b64, best_angle
+        ai_data = _parse_slip_text(ocr_text)
+        attempt_score = _score(ai_data)
+        for key in merged_data:
+            if merged_data[key] is None and ai_data.get(key) is not None:
+                merged_data[key] = ai_data[key]
+        if attempt_score > best_score:
+            best_score = attempt_score
+            best_attempt_data = ai_data.copy()
+            best_ocr_text = ocr_text or ""
+            best_angle = used_angle
+            buffered2 = io.BytesIO()
+            variant.save(buffered2, format="JPEG", quality=85)
+            best_img_b64 = base64.b64encode(buffered2.getvalue()).decode("ascii")
+            print(
+                f"โ… Best OCR updated: {log_prefix} angle={used_angle}ยฐ "
+                f"score={attempt_score}, values={best_attempt_data}"
+            )
+        return ai_data
+
+    variant0 = img_rgb
+    # --- เน€เธเธช 1: เธกเธธเธก 0ยฐ + retry (เธเนเธฒเน€เธฃเธดเนเธก โ€” เธเธฑเธเธชเธฅเธดเธเธ—เธตเนเธ–เนเธฒเธขเธ•เธฃเธ) ---
+    for attempt in range(1, max_retries + 1):
+        if all(merged_data[k] is not None for k in merged_data):
+            break
+        try:
+            ocr_text = _typhoon_ocr_text(variant0)
+            if not ocr_text:
+                continue
+            if SLIP_DEBUG_VERBOSE:
+                if attempt == 1:
+                    print(f"=== Typhoon OCR Result ===\n{ocr_text}\n========================")
+                else:
+                    print(f"=== Typhoon OCR Retry {attempt} ===\n{ocr_text}\n========================")
+            ai_data = _apply_typhoon_result(ocr_text, variant0, 0, f"attempt={attempt}")
+            if all(ai_data.get(k) for k in ("merchant", "date", "time", "last4", "amount", "cardType")):
+                break
+            if all(merged_data[k] is not None for k in merged_data):
+                break
+        except Exception as e:
+            print(f"[Attempt {attempt}] Error calling Typhoon OCR API: {e}")
+            _mark_typhoon_fail()
+            if _is_breaker_open():
+                print("โ  Typhoon failure streak reached breaker threshold; temporarily skipping Typhoon calls.")
+                break
+
+    def _provisional_dict() -> dict:
+        d = {k: best_attempt_data.get(k) for k in best_attempt_data}
+        for k in merged_data:
+            if d.get(k) is None and merged_data.get(k) is not None:
+                d[k] = merged_data[k]
+        return d
+
+    def _needs_rotation_fallback() -> bool:
+        """เธชเธฅเธดเธเน€เธญเธตเธขเธ/เธเธฅเธฑเธเธซเธฑเธงเธกเธฑเธเนเธ”เนเนเธเน last4 เนเธ•เนเนเธกเนเธกเธต merchant/date/amount"""
+        d = _provisional_dict()
+        core = sum(1 for k in ("merchant", "date", "amount", "time") if d.get(k))
+        return core < 3
+
+    # --- เน€เธเธช 2: เธซเธกเธธเธ 90/180/270 เน€เธเธเธฒเธฐเน€เธกเธทเนเธญเธญเนเธฒเธเธ—เธตเน 0ยฐ เนเธฅเนเธงเธขเธฑเธเธญเนเธญเธ (เนเธกเนเธเธฃเธฐเธ—เธเนเธเธฅเนเธ—เธตเนเธ–เนเธฒเธขเธ•เธฃเธ) ---
+    if SLIP_ROTATION_FALLBACK and _needs_rotation_fallback():
+        print("โป OCR at 0ยฐ looks weak โ€” trying Typhoon at 90ยฐ / 180ยฐ / 270ยฐ โ€ฆ")
+        for angle in (90, 180, 270):
+            if all(merged_data[k] is not None for k in merged_data):
+                break
+            variant = img_rgb.rotate(angle, expand=True).convert("RGB")
+            try:
+                ocr_text = _typhoon_ocr_text(variant)
+                if not ocr_text:
+                    continue
+                if SLIP_DEBUG_VERBOSE:
+                    print(f"=== Typhoon OCR rotation {angle}ยฐ ===\n{ocr_text}\n========================")
+                ai_data = _apply_typhoon_result(ocr_text, variant, angle, f"rotation={angle}ยฐ")
+                if all(ai_data.get(k) for k in ("merchant", "date", "time", "last4", "amount", "cardType")):
+                    break
+                if all(merged_data[k] is not None for k in merged_data):
+                    break
+                # เนเธ”เนเธเธดเธฅเธ”เนเธซเธฅเธฑเธเธเธญเนเธเนเนเธฅเนเธง เนเธกเนเธ•เนเธญเธเธฅเธญเธเธกเธธเธกเธ–เธฑเธ”เนเธ
+                d = _provisional_dict()
+                if (
+                    d.get("merchant")
+                    and d.get("date")
+                    and d.get("amount")
+                    and d.get("last4")
+                ):
+                    break
+            except Exception as e:
+                print(f"[Rotation {angle}ยฐ] Error calling Typhoon OCR API: {e}")
+                _mark_typhoon_fail()
+                if _is_breaker_open():
+                    print("โ  Typhoon breaker is open; stopping rotation fallback early.")
+                    break
+
+    # เนเธเนเธเนเธฒเธเธฒเธเธฃเธญเธเธ—เธตเนเธ”เธตเธ—เธตเนเธชเธธเธ”เน€เธเนเธเธเธฒเธ เนเธฅเนเธงเน€เธ•เธดเธกเธเนเธญเธเธ—เธตเนเธขเธฑเธเธงเนเธฒเธเธเธฒเธ merged_data
+    final_data = best_attempt_data.copy()
+    for key in final_data:
+        if final_data.get(key) is None and merged_data.get(key) is not None:
+            final_data[key] = merged_data[key]
+    # เน€เธ•เธดเธกเธเธฒเธ OCR text layer เธ—เธตเนเธชเธฃเนเธฒเธเนเธงเนเธเนเธญเธ (เธเธฃเธ“เธต Typhoon เธเธฅเธฒเธ”เธเธฒเธเธเธดเธฅเธ”เน)
+    if pre_parsed:
+        for key in final_data:
+            if final_data.get(key) is None and pre_parsed.get(key) is not None:
+                final_data[key] = pre_parsed[key]
+
+    tesseract_raw = ""
+    if final_data.get("last4") is None or final_data.get("merchant") is None or final_data.get("amount") is None:
+        # เนเธเนเธกเธธเธกเน€เธ”เธตเธขเธงเธเธฑเธเธฃเธนเธเธ—เธตเน Typhoon เนเธซเนเธเธฐเนเธเธเธ”เธตเธ—เธตเนเธชเธธเธ” (เนเธเนเธชเธฅเธดเธเน€เธญเธตเธขเธ)
+        tess_img = (
+            img_rgb
+            if best_angle == 0
+            else img_rgb.rotate(best_angle, expand=True).convert("RGB")
+        )
+        tesseract_raw, tess_parsed = _tesseract_slip_supplement(tess_img)
+        if tess_parsed:
+            for key in final_data:
+                if key == "amount":
+                    # เธเนเธญเธเธเธฑเธเน€เธ•เธดเธกเธขเธญเธ”เน€เธเธตเนเธขเธเธเธฒเธ OCR เธชเธณเธฃเธญเธ (เน€เธเนเธเธญเนเธฒเธ AVAILABLE BALANCE เธเธดเธ”เน€เธเนเธ TOTAL)
+                    if (
+                        final_data.get(key) is None
+                        and tess_parsed.get(key)
+                        and _amount_has_total_evidence(tesseract_raw, tess_parsed.get(key))
+                    ):
+                        final_data[key] = tess_parsed[key]
+                elif final_data.get(key) is None and tess_parsed.get(key):
+                    final_data[key] = tess_parsed[key]
+            filled = {k: tess_parsed.get(k) for k in ("last4", "amount", "merchant") if tess_parsed.get(k)}
+            if filled:
+                print(f"โ… Tesseract supplement filled: {filled}")
+
+    # OCR เน€เธเธเธฒเธฐเนเธเธเธชเธณเธเธฑเธเธญเธตเธเธเธฑเนเธเธชเธณเธซเธฃเธฑเธเน€เธเธชเธ—เธตเนเธขเธฑเธเธซเธฅเธธเธ” (last4/amount)
+    roi_raw = ""
+    if final_data.get("last4") is None or final_data.get("amount") is None:
+        roi_raw, roi_parsed = _tesseract_slip_roi_boost(
+            img_rgb if best_angle == 0 else img_rgb.rotate(best_angle, expand=True).convert("RGB")
+        )
+        if roi_parsed:
+            roi_filled = {}
+            for key in ("last4", "merchant"):
+                if final_data.get(key) is None and roi_parsed.get(key):
+                    final_data[key] = roi_parsed[key]
+                    roi_filled[key] = roi_parsed[key]
+            if roi_filled:
+                print(f"โ… Tesseract ROI boost filled: {roi_filled}")
+
+    # log เธชเธฃเธธเธ
+    missing = [k for k, v in final_data.items() if v is None]
+    if missing:
+        print(f"โ  Still missing after {max_retries} attempts: {missing}")
+    quality_text = (
+        (best_ocr_text or "")
+        + "\n"
+        + (pre_ocr_text or "")
+        + "\n"
+        + (tesseract_raw or "")
+        + "\n"
+        + (roi_raw or "")
+    ).strip()
+    quality = _build_page_quality(quality_text, final_data)
+
+    return {
+        "image": f"data:image/jpeg;base64,{best_img_b64}",
+        "values": {
+            "merchant": final_data.get("merchant"),
+            "date": final_data.get("date"),
+            "time": final_data.get("time"),
+            "last4": final_data.get("last4"),
+            "amount": final_data.get("amount"),
+            "cardType": final_data.get("cardType"),
+        },
+        "highlights": {
+            "merchant": None,
+            "date": None,
+            "time": None,
+            "last4": None,
+            "amount": None,
+            "cardType": None,
+        },
+        "quality": quality
+    }
+
+
+progress_store = {}
+
+def extract_slip_preview(filename: str, content: bytes, task_id: str = None):
+    api_url = (os.environ.get("TYPHOON_OCR_URL") or "https://api.opentyphoon.ai/v1/ocr").strip()
+    api_key = (os.environ.get("TYPHOON_API_KEY") or os.environ.get("OPENTYPHOON_API_KEY") or "").strip()
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "เธขเธฑเธเนเธกเนเนเธ”เนเธ•เธฑเนเธเธเนเธฒ Typhoon API key: เธ•เธฑเนเธเธเนเธฒ TYPHOON_API_KEY เนเธ environment "
+                "เธซเธฃเธทเธญเธชเธฃเนเธฒเธเนเธเธฅเน backend/.env เธเธฒเธ backend/.env.example"
+            ),
+        )
+
+    lower = (filename or "").lower()
+    source_pdf_bytes = content
+    pre_texts = []
+
+    # PDF -> เธ–เนเธฒเธกเธต text layer เธญเธขเธนเนเนเธฅเนเธง เธชเนเธเน€เธเนเธฒ Typhoon เนเธ”เนเน€เธฅเธข
+    # เธ–เนเธฒเนเธกเนเธกเธต text layer เธเนเธญเธขเนเธเธฅเธเธเนเธญเธ OCR
+    if lower.endswith(".pdf"):
+        has_text_layer = _pdf_has_text_layer(content)
+        should_convert = not has_text_layer
+        converted_bytes, converted_texts = (None, [])
+        if should_convert:
+            provider = SLIP_TEXTLAYER_PROVIDER
+            if provider == "auto":
+                provider = "ilovepdf" if ILOVEPDF_PUBLIC_KEY else "ocrmypdf"
+
+            if provider == "ilovepdf":
+                print("โป Converting PDF to text layer via iLovePDF API (eng) ...")
+                converted_bytes, converted_texts = _ilovepdf_add_text_layer(
+                    content,
+                    filename=(filename or "input.pdf"),
+                    lang="eng",
+                )
+                if not converted_bytes:
+                    print("โป iLovePDF unavailable/failed, fallback to OCRmyPDF ...")
+                    converted_bytes, converted_texts = _ocrmypdf_add_text_layer(content, lang="eng")
+            else:
+                if has_text_layer:
+                    print("โป PDF already has text layer; re-normalizing with OCRmyPDF before Typhoon ...")
+                else:
+                    print("โป PDF has no text layer; converting with OCRmyPDF (eng only) ...")
+                converted_bytes, converted_texts = _ocrmypdf_add_text_layer(content, lang="eng")
+
+        if converted_bytes:
+            source_pdf_bytes = converted_bytes
+            pre_texts = converted_texts
+        else:
+            if has_text_layer:
+                print("โ“ PDF already has text layer; sending directly to Typhoon.")
+            else:
+                print("โป Text-layer conversion unavailable/failed, fallback to Tesseract text hints.")
+
+    # เธ”เธถเธเธฃเธนเธเธ เธฒเธเธเธฒเธเนเธเธฅเนเธ—เธตเนเธเธฐเนเธเนเธงเธดเน€เธเธฃเธฒเธฐเธซเน
+    images = _images_from_upload_bytes(filename, source_pdf_bytes if lower.endswith(".pdf") else content)
+    total_pages = len(images)
+
+    if not pre_texts:
+        pre_texts = [""] * total_pages
+        if lower.endswith(".pdf") and total_pages > 0 and not _pdf_has_text_layer(source_pdf_bytes):
+            pre_texts = _build_textlayer_texts_from_images(images)
+    if len(pre_texts) < total_pages:
+        pre_texts += [""] * (total_pages - len(pre_texts))
+
+    if task_id:
+        progress_store[task_id] = {"current": 0, "total": total_pages}
+
+    workers = max(1, min(SLIP_OCR_WORKERS, total_pages, 8))
+    typhoon_breaker = {"fail_streak": 0, "open": False}
+    typhoon_breaker_lock = threading.Lock()
+    card_hint = _card_hint_from_filename(filename)
+
+    def _run_page(idx: int, page_img):
+        print(f"--- Processing page {idx + 1}/{total_pages} (workers={workers}) ---")
+        return idx, _ocr_single_image(
+            page_img,
+            api_url,
+            api_key,
+            pre_ocr_text=pre_texts[idx] if idx < len(pre_texts) else "",
+            breaker_state=typhoon_breaker,
+            breaker_lock=typhoon_breaker_lock,
+        )
+
+    pages = [None] * total_pages
+    if workers == 1:
+        for i, img in enumerate(images):
+            if task_id:
+                progress_store[task_id] = {"current": i + 1, "total": total_pages}
+            _, pr = _run_page(i, img)
+            pages[i] = pr
+            _print_page_debug(i + 1, pr.get("values"), card_hint)
+    else:
+        done = 0
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            future_map = {pool.submit(_run_page, i, img): i for i, img in enumerate(images)}
+            for fut in as_completed(future_map):
+                idx, page_result = fut.result()
+                pages[idx] = page_result
+                _print_page_debug(idx + 1, page_result.get("values"), card_hint)
+                done += 1
+                if task_id:
+                    progress_store[task_id] = {"current": done, "total": total_pages}
+
+    # Cross-page fill: เน€เธ•เธดเธก last4 เธเธฒเธเธซเธเนเธฒเธญเธทเนเธ
+    all_last4 = [p["values"].get("last4") for p in pages if p["values"].get("last4")]
+    if all_last4:
+        unique_last4 = set(all_last4)
+        if len(unique_last4) == 1:
+            common_last4 = list(unique_last4)[0]
+            for p in pages:
+                if p["values"].get("last4") is None:
+                    p["values"]["last4"] = common_last4
+                    print(f"โ… Filled missing last4 with {common_last4} from other pages (Single card file)")
+        else:
+            print(f"โ ๏ธ Multiple different cards detected {unique_last4}. Applying safe proximity autofill.")
+            for i, p in enumerate(pages):
+                if p["values"].get("last4") is None:
+                    # เธซเธฒเธเธฑเธ•เธฃเธซเธเนเธฒเธเนเธญเธเธซเธเนเธฒเธเธตเน
+                    prev_last4 = None
+                    prev_dist = None
+                    for j in range(i - 1, -1, -1):
+                        if pages[j]["values"].get("last4") is not None:
+                            prev_last4 = pages[j]["values"]["last4"]
+                            prev_dist = i - j
+                            break
+                    
+                    # เธซเธฒเธเธฑเธ•เธฃเธซเธเนเธฒเธ—เนเธฒเธขเธชเธธเธ”
+                    next_last4 = None
+                    next_dist = None
+                    for j in range(i + 1, len(pages)):
+                        if pages[j]["values"].get("last4") is not None:
+                            next_last4 = pages[j]["values"]["last4"]
+                            next_dist = j - i
+                            break
+
+                    chosen_last4 = None
+                    # เธเธฅเธญเธ”เธ เธฑเธขเธชเธธเธ”: เธ–เนเธฒเธซเธเนเธฒเธเนเธฒเธเน เธ—เธฑเนเธเธชเธญเธเธ”เนเธฒเธเน€เธซเนเธเธเนเธฒเน€เธ”เธตเธขเธงเธเธฑเธ เธเนเธญเธขเน€เธ•เธดเธก
+                    if prev_last4 and next_last4 and prev_last4 == next_last4:
+                        chosen_last4 = prev_last4
+                    # เธ–เนเธฒเธกเธตเธ”เนเธฒเธเน€เธ”เธตเธขเธง เน€เธ•เธดเธกเน€เธเธเธฒเธฐเธเธฃเธ“เธตเธญเธขเธนเนเนเธเธฅเนเธกเธฒเธ (เธ•เธดเธ”เธเธฑเธ 1 เธซเธเนเธฒ) เน€เธเธทเนเธญเธฅเธ”เธเธเธเนเธฒเธกเธเธฑเธ•เธฃ
+                    elif prev_last4 and not next_last4 and prev_dist == 1:
+                        chosen_last4 = prev_last4
+                    elif next_last4 and not prev_last4 and next_dist == 1:
+                        chosen_last4 = next_last4
+
+                    if chosen_last4:
+                        p["values"]["last4"] = chosen_last4
+                        print(f"โ… Filled missing last4 on page {i+1} with {chosen_last4} (Safe proximity fill)")
+                    else:
+                        print(f"โท Skip autofill last4 on page {i+1} (ambiguous multi-card context)")
+
+    if task_id and task_id in progress_store:
+        del progress_store[task_id]
+
+    return {
+        "total_pages": total_pages,
+        "pages": pages
+    }
+
+
+
+@app.post("/upload")
+def upload_pdf(files: List[UploadFile] = File(...)):
+    # Validate all files are P            target_idx = card_map[card_id]
+            
+            # Extract Credit Limit from header: เธงเธเน€เธเธดเธ 5,000 เธเธฒเธ—
+            limit_m = re.search(r'เธงเธเน€เธเธดเธ\s+([\d,]+)', section)
+            if limit_m:
+                limit = limit_m.group(1).replace(',', '')
+                data_rows[target_idx]["credit_limit"] = limit
+            
+            # Extract Transactions
+            # Pattern: 03/02/2026 09:28 03/02/2026 1986236666020 PTT RETAIL 0 เนเธเนเธชเนเธเธฎเธญเธฅเน 91 6.49 30.79 200.00
+            txn_lines = section.split('\n')
+            for i, line in enumerate(txn_lines):
+                line = line.strip()
+                # 1. Regular transaction (Fuel)
+                m = re.search(r'(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+(\d{2}/\d{2}/\d{4})\s+(\d+)\s+(.*?)\s+(\d+)\s+(.*?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})', line)
+                if m:
+                    date, time, post_date = m.group(1), m.group(2), m.group(3)
+                    main_desc, product, amount = m.group(5).strip(), m.group(7).strip(), m.group(10)
+                    
+                    # Look ahead for sub-description/branch (up to 2 lines)
+                    sub_desc = []
+                    branch = ""
+                    for j in range(1, 3):
+                        if i + j < len(txn_lines):
+                            next_l = txn_lines[i + j].strip()
+                            # If next line looks like a different row or footer, stop
+                            if re.match(r'\d{2}/\d{2}/\d{4}', next_l) or "เธขเธญเธ”เน€เธเธดเธเธฃเธงเธก" in next_l or "PAYMENT" in next_l:
+                                break
+                            sub_desc.append(next_l)
+                    
+                    if sub_desc:
+                        # Usually the last sub-line is the branch/location
+                        branch = sub_desc[-1]
+                        full_desc = " ".join([main_desc] + sub_desc[:-1]) if len(sub_desc) > 1 else main_desc
+                    else:
+                        full_desc = main_desc
+                    
+                    if not any(t["date"] == date and t["amount"] == amount and t["desc"] == full_desc for t in data_rows[target_idx]["transactions"]):
+                        data_rows[target_idx]["transactions"].append({
+                            "date": date,
+                            "post_date": post_date,
+                            "desc": full_desc.strip(),
+                            "branch": branch.strip(),
+                            "type": product,
+                            "amount": amount
+                        })
+                
+                # 2. Payment line (BBL)
+                pmt_m = re.search(r'(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})\s+PAYMENT\s+([\d,]+\.\d{2}-)', line)
+                if pmt_m:
+                    date, post_date = pmt_m.group(1), pmt_m.group(2)
+                    amount = pmt_m.group(3).replace('-', '')
+                    if not any(t["date"] == date and t["amount"] == amount and t["type"] == "เธเธณเธฃเธฐเน€เธเธดเธ" for t in data_rows[target_idx]["transactions"]):
+                        data_rows[target_idx]["transactions"].append({
+                            "date": date,
+                            "post_date": post_date,
+                            "desc": "เธเธณเธฃเธฐเน€เธเธดเธเธเธทเธ",
+                            "branch": "",
+                            "type": "เธเธณเธฃเธฐเน€เธเธดเธ",
+                            "amount": amount
+                        })
+
+            # Extract Total Amount (Footer) for this card
+            # เธขเธญเธ”เน€เธเธดเธเธฃเธงเธกเธ—เธฑเนเนเธเธซเธกเธ” (Total Amount) 1,800.00-
+            footer_m = re.search(r'เธขเธญเธ”เน€เธเธดเธเธฃเธงเธก.*?\(Total.*?Amount\)\s*([\d,]+\.\d{2})', section, re.IGNORECASE)
+            if footer_m:
+                total_amt = footer_m.group(1).replace(',', '')
+                data_rows[target_idx]["balance"] = total_amt
+                data_rows[target_idx]["total_balance_calc"] = total_amt
+            
+            # Update transaction count
+            data_rows[target_idx]["transaction_count"] = len(data_rows[target_idx]["transactions"])
+"CARD" in card.get("account_name").upper():
+                            existing["account_name"] = card["account_name"]
+            else:
+                res = extract_kasikorn_ocr(content)
+                kbank_data.extend(res)
+
+        final_data = []
+        if bbl_merged_data:
+            sorted_bbl = sorted(bbl_merged_data.values(), key=lambda x: str(x.get("card_id", "")))
+            final_data.extend(sorted_bbl)
+        if kbank_data:
+            final_data.extend(kbank_data)
+            
+        return {
+            "filename": ", ".join([f.filename for f in files]),
+            "count": len(final_data),
+            "data": final_data,
+            "summary": bbl_summary if bbl_merged_data else None
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def extract_bbl_ocr(pdf_bytes):
+    data_rows = []
+    card_map = {} # card_id -> index in data_rows
+    
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        all_text = ""
+        for page in pdf.pages:
+            all_text += (page.extract_text() or "") + "\n---PAGE_BREAK---\n"
+            
+        # 1. Global Summary Extraction
+        global_prev_bal = "0.00"
+        global_curr_total = "0.00"
+        
+        # Robust number regex: handles optional spaces like "4,700 . 00" or "11,300.00"
+        num_pattern = r'([\d,]+\s*\.\s*\d{2})'
+
+        print(f"DEBUG: BBL Extraction - Total Text Length: {len(all_text)}")
+
+        # Look for "Previous Balance" and take the number appearing just before it
+        prev_bal_search = re.search(num_pattern + r'[\s\S]{0,40}Previous Balance', all_text, re.IGNORECASE)
+        if prev_bal_search:
+            global_prev_bal = re.sub(r'\s+', '', prev_bal_search.group(1))
+            print(f"DEBUG: Found Previous Balance: {global_prev_bal}")
+        else:
+            print("DEBUG: Previous Balance NOT found via regex")
+        
+        # Look for "Total Amount Due" or "Total" summary line
+        curr_total_search = re.search(r'Total\s+[\d,.\s]+\s+' + num_pattern + r'\s+-\s+' + num_pattern, all_text, re.IGNORECASE)
+        if curr_total_search:
+            global_curr_total = re.sub(r'\s+', '', curr_total_search.group(2))
+            print(f"DEBUG: Found Current Total (via Total row): {global_curr_total}")
+        else:
+            # Fallback for "เธชเธฃเธธเธเธเนเธฒเนเธเนเธเนเธฒเธขเธเธงเธ”เธเธฑเธเธเธธเธเธฑเธ" values
+            curr_vals = re.findall(num_pattern + r'\s+.{1,10}\s+' + num_pattern + r'\s+.{1,10}', all_text)
+            if curr_vals:
+                global_curr_total = re.sub(r'\s+', '', curr_vals[0][1])
+                print(f"DEBUG: Found Current Total (via Page 1 Box): {global_curr_total}")
+            else:
+                print("DEBUG: Current Total NOT found via regex")
+
+        # 2. Card Row Extraction (Account Summary Table)
+        for line in all_text.split('\n'):
+            m = re.search(r'(\d{4}\s+00xx\s+xxxx\s+(\d{4}))[^\n]*?\s+([\d,]+\s*\.?\s*\d*)\s+Baht[^\n]*?([\d,]+\s*\.\s*\d{2})', line)
+            if m:
+                card_no = m.group(1)
+                card_id = m.group(2)
+                limit = re.sub(r'\s+', '', m.group(3))
+                parts = line.split()
+                try:
+                    balance = parts[-1] 
+                    if not re.match(r'[\d,]+\.\d{2}', balance):
+                        balance = m.group(4)
+                except:
+                    balance = m.group(4)
+
+                print(f"DEBUG: Matched Card ID: {card_id}, Limit: {limit}, Balance: {balance}")
+                
+                if card_id not in card_map:
+                    data_rows.append({
+                        "card_no": card_no,
+                        "card_id": card_id,
+                        "account_name": f"CARD {card_id}",
+                        "credit_limit": limit,
+                        "balance": balance,
+                        "min_payment": "0.00",
+                        "previous_balance": "0.00",
+                        "total_balance_calc": balance,
+                        "transaction_count": 0,
+                        "transactions": []
+                    })
+                    card_map[card_id] = len(data_rows) - 1
+        
+        print(f"DEBUG: Found {len(data_rows)} card summary rows")
+
+        # 3. Look for Account Details (Transaction per card)
+        sections = re.split(r'Account\s+Details|เธฃเธฒเธขเธฅเธฐเน€เธญเธตเธขเธ”เธฃเธฒเธขเธเธฒเธฃเนเธเนเธเนเธฒเธข', all_text, flags=re.IGNORECASE)
+        print(f"DEBUG: Found {len(sections) - 1} detail sections")
+        for section in sections[1:]:
+            # Find the card number for this section
+            # BBL format: เธซเธกเธฒเธขเน€เธฅเธเธเธฑเธ•เธฃ 1 400 00xx xxx x 6919
+            # Allow digits, spaces, x, X
+            card_head_match = re.search(r'เธซเธกเธฒเธขเน€เธฅเธเธเธฑเธ•เธฃ\s+([\d\sXx]+)', section)
+            if not card_head_match:
+                continue
+            
+            raw_card_no = card_head_match.group(1).strip()
+            clean_all_digits = re.sub(r'[^\d]+', '', raw_card_no)
+            # The last 4 digits we want are the last 4 actual digits
+            if len(clean_all_digits) >= 4:
+                card_id = clean_all_digits[-4:]
+            else:
+                card_id = "0000"
+            
+            print(f"DEBUG: Processing details for Card ID: {card_id} (Full: {raw_card_no})")
+            if card_id not in card_map:
+                data_rows.append({
+                    "card_no": raw_card_no,
+                    "card_id": card_id,
+                    "account_name": f"CARD {card_id}",
+                    "credit_limit": "0.00",
+                    "balance": "0.00",
+                    "min_payment": "0.00",
+                    "previous_balance": "0.00",
+                    "total_balance_calc": "0.00",
+                    "transaction_count": 0,
+                    "transactions": []
+                })
+                card_map[card_id] = len(data_rows) - 1
+            
+            target_idx = card_map[card_id]
+            
+            # Extract Previous Balance if exists in section
+            prev_bal_m = re.search(r'Previous Balance\s+([\d,]+\.\d{2})\s*เธเธฒเธ—', section, re.IGNORECASE)
+            if prev_bal_m:
+                data_rows[target_idx]["previous_balance"] = prev_bal_m.group(1)
+
+            # Extract Transactions
+            # Pattern: 03/02/2026 09:28 03/02/2026 1986236666020 PTT RETAIL 0 เนเธเนเธชเนเธเธฎเธญเธฅเน 91 6.49 30.79 200.00
+            # Or Payment: 25/02/2026 25/02/2026 PAYMENT 3,000.00-
+            txn_lines = section.split('\n')
+            for line in txn_lines:
+                line = line.strip()
+                # 1. Regular transaction (Fuel)
+                m = re.search(r'(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+(\d{2}/\d{2}/\d{4})\s+(\d+)\s+(.*?)\s+(\d+)\s+(.*?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})', line)
+                if m:
+                    date, time, post_date = m.group(1), m.group(2), m.group(3)
+                    desc, gas_type, amount = m.group(5).strip(), m.group(7).strip(), m.group(10)
+                    full_desc = f"{desc} ({gas_type}) {time}"
+                    if not any(t["date"] == date and t["amount"] == amount and t["desc"] == full_desc for t in data_rows[target_idx]["transactions"]):
+                        data_rows[target_idx]["transactions"].append({
+                            "date": date,
+                            "post_date": post_date,
+                            "desc": full_desc,
+                            "type": "เน€เธ•เธดเธกเธเนเธณเธกเธฑเธ",
+                            "amount": amount
+                        })
+                
+                # 2. Payment line (BBL)
+                pmt_m = re.search(r'(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})\s+PAYMENT\s+([\d,]+\.\d{2}-)', line)
+                if pmt_m:
+                    date, post_date = pmt_m.group(1), pmt_m.group(2)
+                    amount = pmt_m.group(3).replace('-', '')
+                    if not any(t["date"] == date and t["amount"] == amount and t["type"] == "เธเธณเธฃเธฐเน€เธเธดเธ" for t in data_rows[target_idx]["transactions"]):
+                        data_rows[target_idx]["transactions"].append({
+                            "date": date,
+                            "post_date": post_date,
+                            "desc": "PAYMENT",
+                            "type": "เธเธณเธฃเธฐเน€เธเธดเธ",
+                            "amount": amount
+                        })
+            
+            # Update transaction count
+            data_rows[target_idx]["transaction_count"] = len(data_rows[target_idx]["transactions"])
+    return {
+        "data": data_rows,
+        "summary": {
+            "previous_balance": global_prev_bal,
+            "current_total": global_curr_total
+        }
+    }

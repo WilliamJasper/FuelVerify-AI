@@ -1,12 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from typing import List
 import pdfplumber
 import io
 import re
 import base64
 import json
 import sqlite3
-
 from PIL import Image, ImageOps
 import pytesseract
 import fitz  # PyMuPDF
@@ -19,6 +19,11 @@ import sys
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
+
+def normalize_thai_numerals(text: str) -> str:
+    if not text: return text
+    thai_to_arabic = str.maketrans("๐๑๒๓๔๕๖๗๘๙", "0123456789")
+    return text.translate(thai_to_arabic)
 
 # โหลด backend/.env (ถ้ามี) — ไฟล์นี้อยู่ใน .gitignore อย่า commit คีย์จริง
 try:
@@ -81,7 +86,14 @@ def init_db():
     c = conn.cursor()
     # ตารางเก็บข้อมูล Record หลัก (Metadata + Statement Results)
     c.execute('''CREATE TABLE IF NOT EXISTS records
-                 (id TEXT PRIMARY KEY, name TEXT, date TEXT, type TEXT, data TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+                 (id TEXT PRIMARY KEY, name TEXT, date TEXT, type TEXT, data TEXT, hidden INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
+    
+    # อัปโหลด Schema เก่าให้รองรับ hidden (Migration)
+    try:
+        c.execute("ALTER TABLE records ADD COLUMN hidden INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass # คอลัมน์มีอยู่แล้ว
+        
     # ตารางเก็บรูปภาพและผล OCR แบบละเอียด (แทน IndexedDB)
     c.execute('''CREATE TABLE IF NOT EXISTS slip_blobs
                  (id TEXT PRIMARY KEY, data TEXT)''')
@@ -143,11 +155,16 @@ def extract_kasikorn_ocr(pdf_bytes):
                         # Extract ID number from name (e.g., "VIP 36" -> "36")
                         name_num_match = re.search(r'(\d+)', account_full_name)
                         display_id = name_num_match.group(1) if name_num_match else tokens[3]
+                        
+                        clean_account_name = account_full_name.strip()
+                        # เปลี่ยน VIP เป็น หมายเลขบัตร
+                        if clean_account_name.upper().startswith("VIP"):
+                            clean_account_name = re.sub(r'^VIP\s*', 'หมายเลขบัตร ', clean_account_name, flags=re.IGNORECASE)
 
                         data_rows.append({
                             "card_no": card_no,
                             "card_id": display_id,
-                            "account_name": account_full_name.strip(),
+                            "account_name": clean_account_name,
                             "credit_limit": credit_limit,
                             "balance": balance,
                             "min_payment": min_payment,
@@ -304,7 +321,8 @@ def _parse_slip_text(ocr_text: str) -> dict:
 
     # ===== ลบ HTML tags และ Markdown ออก =====
     # ใส่ newline ที่ </tr> เพื่อรักษาโครงสร้างแถวของ table
-    clean_text = re.sub(r'</tr>', '\n', ocr_text, flags=re.IGNORECASE)
+    clean_text = normalize_thai_numerals(ocr_text)
+    clean_text = re.sub(r'</tr>', '\n', clean_text, flags=re.IGNORECASE)
     # ลบ <br/> แทนด้วย space
     clean_text = re.sub(r'<br\s*/?>', ' ', clean_text, flags=re.IGNORECASE)
     # ลบ HTML tags ที่เหลือ
@@ -1116,7 +1134,7 @@ def _build_textlayer_texts_from_images(images: list[Image.Image]) -> list[str]:
 def _card_hint_from_filename(filename: str) -> str:
     m = re.search(r"\bVIP\s*([0-9]+)\b", (filename or ""), re.IGNORECASE)
     if m:
-        return f"VIP{m.group(1)}"
+        return f"หมายเลขบัตร {m.group(1)}"
     return "UNKNOWN"
 
 
@@ -1401,463 +1419,269 @@ def _ocr_single_image(
             buffered2 = io.BytesIO()
             variant.save(buffered2, format="JPEG", quality=85)
             best_img_b64 = base64.b64encode(buffered2.getvalue()).decode("ascii")
-            print(
-                f"✅ Best OCR updated: {log_prefix} angle={used_angle}° "
-                f"score={attempt_score}, values={best_attempt_data}"
-            )
+            print(f"✅ Best OCR updated: {log_prefix} angle={used_angle}° score={attempt_score}")
         return ai_data
 
     variant0 = img_rgb
-    # --- เฟส 1: มุม 0° + retry (ค่าเริ่ม — กันสลิปที่ถ่ายตรง) ---
     for attempt in range(1, max_retries + 1):
-        if all(merged_data[k] is not None for k in merged_data):
-            break
+        if all(merged_data[k] is not None for k in merged_data): break
         try:
             ocr_text = _typhoon_ocr_text(variant0)
-            if not ocr_text:
-                continue
-            if SLIP_DEBUG_VERBOSE:
-                if attempt == 1:
-                    print(f"=== Typhoon OCR Result ===\n{ocr_text}\n========================")
-                else:
-                    print(f"=== Typhoon OCR Retry {attempt} ===\n{ocr_text}\n========================")
-            ai_data = _apply_typhoon_result(ocr_text, variant0, 0, f"attempt={attempt}")
-            if all(ai_data.get(k) for k in ("merchant", "date", "time", "last4", "amount", "cardType")):
-                break
-            if all(merged_data[k] is not None for k in merged_data):
-                break
-        except Exception as e:
-            print(f"[Attempt {attempt}] Error calling Typhoon OCR API: {e}")
-            _mark_typhoon_fail()
-            if _is_breaker_open():
-                print("⚠ Typhoon failure streak reached breaker threshold; temporarily skipping Typhoon calls.")
-                break
+            if not ocr_text: continue
+            _apply_typhoon_result(ocr_text, variant0, 0, f"attempt={attempt}")
+        except Exception as e: print(f"Error: {e}"); _mark_typhoon_fail()
 
-    def _provisional_dict() -> dict:
-        d = {k: best_attempt_data.get(k) for k in best_attempt_data}
-        for k in merged_data:
-            if d.get(k) is None and merged_data.get(k) is not None:
-                d[k] = merged_data[k]
-        return d
-
-    def _needs_rotation_fallback() -> bool:
-        """สลิปเอียง/กลับหัวมักได้แค่ last4 แต่ไม่มี merchant/date/amount"""
-        d = _provisional_dict()
-        core = sum(1 for k in ("merchant", "date", "amount", "time") if d.get(k))
-        return core < 3
-
-    # --- เฟส 2: หมุน 90/180/270 เฉพาะเมื่ออ่านที่ 0° แล้วยังอ่อน (ไม่กระทบไฟล์ที่ถ่ายตรง) ---
-    if SLIP_ROTATION_FALLBACK and _needs_rotation_fallback():
-        print("↻ OCR at 0° looks weak — trying Typhoon at 90° / 180° / 270° …")
+    if SLIP_ROTATION_FALLBACK:
         for angle in (90, 180, 270):
-            if all(merged_data[k] is not None for k in merged_data):
-                break
+            if all(merged_data[k] is not None for k in merged_data): break
             variant = img_rgb.rotate(angle, expand=True).convert("RGB")
             try:
                 ocr_text = _typhoon_ocr_text(variant)
-                if not ocr_text:
-                    continue
-                if SLIP_DEBUG_VERBOSE:
-                    print(f"=== Typhoon OCR rotation {angle}° ===\n{ocr_text}\n========================")
-                ai_data = _apply_typhoon_result(ocr_text, variant, angle, f"rotation={angle}°")
-                if all(ai_data.get(k) for k in ("merchant", "date", "time", "last4", "amount", "cardType")):
-                    break
-                if all(merged_data[k] is not None for k in merged_data):
-                    break
-                # ได้ฟิลด์หลักพอใช้แล้ว ไม่ต้องลองมุมถัดไป
-                d = _provisional_dict()
-                if (
-                    d.get("merchant")
-                    and d.get("date")
-                    and d.get("amount")
-                    and d.get("last4")
-                ):
-                    break
-            except Exception as e:
-                print(f"[Rotation {angle}°] Error calling Typhoon OCR API: {e}")
-                _mark_typhoon_fail()
-                if _is_breaker_open():
-                    print("⚠ Typhoon breaker is open; stopping rotation fallback early.")
-                    break
+                if ocr_text: _apply_typhoon_result(ocr_text, variant, angle, f"rotation={angle}°")
+            except Exception: pass
 
-    # ใช้ค่าจากรอบที่ดีที่สุดเป็นฐาน แล้วเติมช่องที่ยังว่างจาก merged_data
     final_data = best_attempt_data.copy()
-    for key in final_data:
-        if final_data.get(key) is None and merged_data.get(key) is not None:
-            final_data[key] = merged_data[key]
-    # เติมจาก OCR text layer ที่สร้างไว้ก่อน (กรณี Typhoon พลาดบางฟิลด์)
+    for k in final_data: 
+        if final_data.get(k) is None: final_data[k] = merged_data.get(k)
     if pre_parsed:
-        for key in final_data:
-            if final_data.get(key) is None and pre_parsed.get(key) is not None:
-                final_data[key] = pre_parsed[key]
+        for k in final_data: 
+            if final_data.get(k) is None: final_data[k] = pre_parsed.get(k)
 
     tesseract_raw = ""
-    if final_data.get("last4") is None or final_data.get("merchant") is None or final_data.get("amount") is None:
-        # ใช้มุมเดียวกับรูปที่ Typhoon ให้คะแนนดีที่สุด (แก้สลิปเอียง)
-        tess_img = (
-            img_rgb
-            if best_angle == 0
-            else img_rgb.rotate(best_angle, expand=True).convert("RGB")
-        )
+    if any(final_data.get(k) is None for k in ("last4", "merchant", "amount")):
+        tess_img = img_rgb if best_angle == 0 else img_rgb.rotate(best_angle, expand=True).convert("RGB")
         tesseract_raw, tess_parsed = _tesseract_slip_supplement(tess_img)
         if tess_parsed:
-            for key in final_data:
-                if key == "amount":
-                    # ป้องกันเติมยอดเพี้ยนจาก OCR สำรอง (เช่นอ่าน AVAILABLE BALANCE ผิดเป็น TOTAL)
-                    if (
-                        final_data.get(key) is None
-                        and tess_parsed.get(key)
-                        and _amount_has_total_evidence(tesseract_raw, tess_parsed.get(key))
-                    ):
-                        final_data[key] = tess_parsed[key]
-                elif final_data.get(key) is None and tess_parsed.get(key):
-                    final_data[key] = tess_parsed[key]
-            filled = {k: tess_parsed.get(k) for k in ("last4", "amount", "merchant") if tess_parsed.get(k)}
-            if filled:
-                print(f"✅ Tesseract supplement filled: {filled}")
+            for k in final_data:
+                if final_data.get(k) is None: final_data[k] = tess_parsed.get(k)
 
-    # OCR เฉพาะโซนสำคัญอีกชั้นสำหรับเคสที่ยังหลุด (last4/amount)
     roi_raw = ""
     if final_data.get("last4") is None or final_data.get("amount") is None:
-        roi_raw, roi_parsed = _tesseract_slip_roi_boost(
-            img_rgb if best_angle == 0 else img_rgb.rotate(best_angle, expand=True).convert("RGB")
-        )
+        roi_raw, roi_parsed = _tesseract_slip_roi_boost(img_rgb if best_angle == 0 else img_rgb.rotate(best_angle, expand=True).convert("RGB"))
         if roi_parsed:
-            roi_filled = {}
-            for key in ("last4", "merchant"):
-                if final_data.get(key) is None and roi_parsed.get(key):
-                    final_data[key] = roi_parsed[key]
-                    roi_filled[key] = roi_parsed[key]
-            if roi_filled:
-                print(f"✅ Tesseract ROI boost filled: {roi_filled}")
+            for k in ("last4", "merchant"): 
+                if final_data.get(k) is None: final_data[k] = roi_parsed.get(k)
 
-    # log สรุป
-    missing = [k for k, v in final_data.items() if v is None]
-    if missing:
-        print(f"⚠ Still missing after {max_retries} attempts: {missing}")
-    quality_text = (
-        (best_ocr_text or "")
-        + "\n"
-        + (pre_ocr_text or "")
-        + "\n"
-        + (tesseract_raw or "")
-        + "\n"
-        + (roi_raw or "")
-    ).strip()
-    quality = _build_page_quality(quality_text, final_data)
+    quality_text = (best_ocr_text or "") + "\n" + (pre_ocr_text or "") + "\n" + (tesseract_raw or "") + "\n" + (roi_raw or "")
+    quality = _build_page_quality(quality_text.strip(), final_data)
 
     return {
         "image": f"data:image/jpeg;base64,{best_img_b64}",
-        "values": {
-            "merchant": final_data.get("merchant"),
-            "date": final_data.get("date"),
-            "time": final_data.get("time"),
-            "last4": final_data.get("last4"),
-            "amount": final_data.get("amount"),
-            "cardType": final_data.get("cardType"),
-        },
-        "highlights": {
-            "merchant": None,
-            "date": None,
-            "time": None,
-            "last4": None,
-            "amount": None,
-            "cardType": None,
-        },
+        "values": final_data,
+        "highlights": {k: None for k in final_data},
         "quality": quality
     }
-
 
 progress_store = {}
 
 def extract_slip_preview(filename: str, content: bytes, task_id: str = None):
     api_url = (os.environ.get("TYPHOON_OCR_URL") or "https://api.opentyphoon.ai/v1/ocr").strip()
     api_key = (os.environ.get("TYPHOON_API_KEY") or os.environ.get("OPENTYPHOON_API_KEY") or "").strip()
-    if not api_key:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "ยังไม่ได้ตั้งค่า Typhoon API key: ตั้งค่า TYPHOON_API_KEY ใน environment "
-                "หรือสร้างไฟล์ backend/.env จาก backend/.env.example"
-            ),
-        )
-
-    lower = (filename or "").lower()
-    source_pdf_bytes = content
-    pre_texts = []
-
-    # PDF -> ถ้ามี text layer อยู่แล้ว ส่งเข้า Typhoon ได้เลย
-    # ถ้าไม่มี text layer ค่อยแปลงก่อน OCR
+    if not api_key: raise HTTPException(status_code=503, detail="Missing API Key")
+    lower = (filename or "").lower(); source_pdf_bytes = content; pre_texts = []
     if lower.endswith(".pdf"):
         has_text_layer = _pdf_has_text_layer(content)
-        should_convert = not has_text_layer
-        converted_bytes, converted_texts = (None, [])
-        if should_convert:
+        if not has_text_layer:
             provider = SLIP_TEXTLAYER_PROVIDER
-            if provider == "auto":
-                provider = "ilovepdf" if ILOVEPDF_PUBLIC_KEY else "ocrmypdf"
-
+            if provider == "auto": provider = "ilovepdf" if ILOVEPDF_PUBLIC_KEY else "ocrmypdf"
             if provider == "ilovepdf":
-                print("↻ Converting PDF to text layer via iLovePDF API (eng) ...")
-                converted_bytes, converted_texts = _ilovepdf_add_text_layer(
-                    content,
-                    filename=(filename or "input.pdf"),
-                    lang="eng",
-                )
-                if not converted_bytes:
-                    print("↻ iLovePDF unavailable/failed, fallback to OCRmyPDF ...")
-                    converted_bytes, converted_texts = _ocrmypdf_add_text_layer(content, lang="eng")
-            else:
-                if has_text_layer:
-                    print("↻ PDF already has text layer; re-normalizing with OCRmyPDF before Typhoon ...")
-                else:
-                    print("↻ PDF has no text layer; converting with OCRmyPDF (eng only) ...")
-                converted_bytes, converted_texts = _ocrmypdf_add_text_layer(content, lang="eng")
-
-        if converted_bytes:
-            source_pdf_bytes = converted_bytes
-            pre_texts = converted_texts
-        else:
-            if has_text_layer:
-                print("✓ PDF already has text layer; sending directly to Typhoon.")
-            else:
-                print("↻ Text-layer conversion unavailable/failed, fallback to Tesseract text hints.")
-
-    # ดึงรูปภาพจากไฟล์ที่จะใช้วิเคราะห์
-    images = _images_from_upload_bytes(filename, source_pdf_bytes if lower.endswith(".pdf") else content)
+                source_pdf_bytes, pre_texts = _ilovepdf_add_text_layer(content, filename=(filename or "input.pdf"))
+                if not source_pdf_bytes: source_pdf_bytes, pre_texts = _ocrmypdf_add_text_layer(content)
+            else: source_pdf_bytes, pre_texts = _ocrmypdf_add_text_layer(content)
+        if not source_pdf_bytes: source_pdf_bytes = content
+    images = _images_from_upload_bytes(filename, source_pdf_bytes)
     total_pages = len(images)
-
-    if not pre_texts:
-        pre_texts = [""] * total_pages
-        if lower.endswith(".pdf") and total_pages > 0 and not _pdf_has_text_layer(source_pdf_bytes):
-            pre_texts = _build_textlayer_texts_from_images(images)
-    if len(pre_texts) < total_pages:
-        pre_texts += [""] * (total_pages - len(pre_texts))
-
-    if task_id:
-        progress_store[task_id] = {"current": 0, "total": total_pages}
-
+    if not pre_texts: pre_texts = [""] * total_pages
+    if task_id: progress_store[task_id] = {"current": 0, "total": total_pages}
     workers = max(1, min(SLIP_OCR_WORKERS, total_pages, 8))
-    typhoon_breaker = {"fail_streak": 0, "open": False}
-    typhoon_breaker_lock = threading.Lock()
-    card_hint = _card_hint_from_filename(filename)
-
+    typhoon_breaker = {"fail_streak": 0, "open": False}; typhoon_breaker_lock = threading.Lock()
     def _run_page(idx: int, page_img):
-        print(f"--- Processing page {idx + 1}/{total_pages} (workers={workers}) ---")
-        return idx, _ocr_single_image(
-            page_img,
-            api_url,
-            api_key,
-            pre_ocr_text=pre_texts[idx] if idx < len(pre_texts) else "",
-            breaker_state=typhoon_breaker,
-            breaker_lock=typhoon_breaker_lock,
-        )
-
+        return idx, _ocr_single_image(page_img, api_url, api_key, pre_ocr_text=pre_texts[idx] if idx < len(pre_texts) else "", breaker_state=typhoon_breaker, breaker_lock=typhoon_breaker_lock)
     pages = [None] * total_pages
-    if workers == 1:
-        for i, img in enumerate(images):
-            if task_id:
-                progress_store[task_id] = {"current": i + 1, "total": total_pages}
-            _, pr = _run_page(i, img)
-            pages[i] = pr
-            _print_page_debug(i + 1, pr.get("values"), card_hint)
-    else:
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_map = {pool.submit(_run_page, i, img): i for i, img in enumerate(images)}
         done = 0
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            future_map = {pool.submit(_run_page, i, img): i for i, img in enumerate(images)}
-            for fut in as_completed(future_map):
-                idx, page_result = fut.result()
-                pages[idx] = page_result
-                _print_page_debug(idx + 1, page_result.get("values"), card_hint)
-                done += 1
-                if task_id:
-                    progress_store[task_id] = {"current": done, "total": total_pages}
-
-    # Cross-page fill: เติม last4 จากหน้าอื่น
+        for fut in as_completed(future_map):
+            idx, pr = fut.result(); pages[idx] = pr; done += 1
+            if task_id: progress_store[task_id] = {"current": done, "total": total_pages}
     all_last4 = [p["values"].get("last4") for p in pages if p["values"].get("last4")]
     if all_last4:
-        unique_last4 = set(all_last4)
-        if len(unique_last4) == 1:
-            common_last4 = list(unique_last4)[0]
-            for p in pages:
-                if p["values"].get("last4") is None:
-                    p["values"]["last4"] = common_last4
-                    print(f"✅ Filled missing last4 with {common_last4} from other pages (Single card file)")
-        else:
-            print(f"⚠️ Multiple different cards detected {unique_last4}. Applying safe proximity autofill.")
-            for i, p in enumerate(pages):
-                if p["values"].get("last4") is None:
-                    # หาบัตรหน้าก่อนหน้านี้
-                    prev_last4 = None
-                    prev_dist = None
-                    for j in range(i - 1, -1, -1):
-                        if pages[j]["values"].get("last4") is not None:
-                            prev_last4 = pages[j]["values"]["last4"]
-                            prev_dist = i - j
-                            break
-                    
-                    # หาบัตรหน้าท้ายสุด
-                    next_last4 = None
-                    next_dist = None
-                    for j in range(i + 1, len(pages)):
-                        if pages[j]["values"].get("last4") is not None:
-                            next_last4 = pages[j]["values"]["last4"]
-                            next_dist = j - i
-                            break
-
-                    chosen_last4 = None
-                    # ปลอดภัยสุด: ถ้าหน้าข้างๆ ทั้งสองด้านเห็นค่าเดียวกัน ค่อยเติม
-                    if prev_last4 and next_last4 and prev_last4 == next_last4:
-                        chosen_last4 = prev_last4
-                    # ถ้ามีด้านเดียว เติมเฉพาะกรณีอยู่ใกล้มาก (ติดกัน 1 หน้า) เพื่อลดปนข้ามบัตร
-                    elif prev_last4 and not next_last4 and prev_dist == 1:
-                        chosen_last4 = prev_last4
-                    elif next_last4 and not prev_last4 and next_dist == 1:
-                        chosen_last4 = next_last4
-
-                    if chosen_last4:
-                        p["values"]["last4"] = chosen_last4
-                        print(f"✅ Filled missing last4 on page {i+1} with {chosen_last4} (Safe proximity fill)")
-                    else:
-                        print(f"↷ Skip autofill last4 on page {i+1} (ambiguous multi-card context)")
-
-    if task_id and task_id in progress_store:
-        del progress_store[task_id]
-
-    return {
-        "total_pages": total_pages,
-        "pages": pages
-    }
-
-
+        common = list(set(all_last4))[0] if len(set(all_last4)) == 1 else None
+        for p in pages: 
+            if p["values"].get("last4") is None: p["values"]["last4"] = common
+    if task_id and task_id in progress_store: del progress_store[task_id]
+    return {"total_pages": total_pages, "pages": pages}
 
 @app.post("/upload")
-def upload_pdf(file: UploadFile = File(...)):
-    if not file.filename.endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
-    
+def upload_pdf(files: List[UploadFile] = File(...)):
+    for f in files:
+        if not (f.filename or "").lower().endswith(".pdf"): raise HTTPException(status_code=400, detail="Invalid file type")
     try:
-        content = file.file.read()
-        extracted_data = extract_kasikorn_ocr(content)
-        return {
-            "filename": file.filename,
-            "count": len(extracted_data),
-            "data": extracted_data
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        bbl_merged_data = {}; bbl_summary = {"previous_balance": "0.00", "current_total": "0.00"}; kbank_data = []
+        for f in files:
+            content = f.file.read(); f.file.seek(0); text_preview = ""
+            with pdfplumber.open(io.BytesIO(content)) as pdf:
+                for p in pdf.pages[:2]: text_preview += (p.extract_text() or "")
+            if "BANGKOK BANK" in text_preview.upper() or "ธนาคารกรุงเทพ" in text_preview:
+                res_obj = extract_bbl_ocr(content); res = res_obj.get("data", []); s = res_obj.get("summary", {})
+                if s.get("previous_balance") != "0.00": bbl_summary["previous_balance"] = s.get("previous_balance")
+                if s.get("current_total") != "0.00": bbl_summary["current_total"] = s.get("current_total")
+                for card in res:
+                    cid = card.get("card_id")
+                    if cid not in bbl_merged_data: bbl_merged_data[cid] = card
+                    else:
+                        existing = bbl_merged_data[cid]
+                        if card.get("transactions"): existing["transactions"].extend(card["transactions"])
+                        existing["transaction_count"] = len(existing["transactions"])
+                        if card.get("balance") != "0.00": existing["balance"] = card["balance"]
+            else: kbank_data.extend(extract_kasikorn_ocr(content))
+        final = sorted(bbl_merged_data.values(), key=lambda x: str(x.get("card_id", ""))) + kbank_data
+        return {"filename": ", ".join([f.filename for f in files]), "count": len(final), "data": final, "summary": bbl_summary if bbl_merged_data else None}
+    except Exception as e: import traceback; traceback.print_exc(); raise HTTPException(status_code=500, detail=str(e))
 
+def extract_bbl_ocr(pdf_bytes):
+    data_rows = []; card_map = {}
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        all_text = ""
+        for page in pdf.pages: all_text += (page.extract_text() or "") + "\n---PAGE_BREAK---\n"
+        num_pattern = r'([\d,]+\s*\.\s*\d{2})'
+        global_prev_bal = "0.00"; global_curr_total = "0.00"
+        m_prev = re.search(num_pattern + r'[\s\S]{0,40}Previous Balance', all_text, re.IGNORECASE)
+        if m_prev: global_prev_bal = re.sub(r'\s+', '', m_prev.group(1))
+        m_curr = re.search(r'Total\s+[\d,.\s]+\s+' + num_pattern + r'\s+-\s+' + num_pattern, all_text, re.IGNORECASE)
+        if m_curr: global_curr_total = re.sub(r'\s+', '', m_curr.group(2))
+        for line in all_text.split('\n'):
+            # Flexible card ID match: supports spaces or dashes and case-insensitive X
+            m = re.search(r'(\d{4}[\s-]*00[xX]{2}[\s-]*(?:[xX]{4}|XXXX)[\s-]*(\d{4}))[^\n]*?\s+([\d,]+\s*\.?\s*\d*)\s+Baht[^\n]*?([\d,]+\s*\.\s*\d{2})', line)
+            if m:
+                card_id = m.group(2)
+                if card_id not in card_map:
+                    data_rows.append({"card_no": m.group(1), "card_id": card_id, "account_name": f"CARD {card_id}", "credit_limit": re.sub(r'\s+', '', m.group(3)), "balance": m.group(4), "min_payment": "0.00", "previous_balance": "0.00", "total_balance_calc": m.group(4), "transaction_count": 0, "transactions": []})
+                    card_map[card_id] = len(data_rows) - 1
+        sections = re.split(r'Account\s+Details|รายละเอียดรายการใช้จ่าย', all_text, flags=re.IGNORECASE)
+        for section in sections[1:]:
+            m_card = re.search(r'หมายเลขบัตร\s+([\d\sXx]+)', section)
+            if not m_card: continue
+            clean_digits = re.sub(r'[^\d]+', '', m_card.group(1)); card_id = clean_digits[-4:]
+            if card_id not in card_map:
+                data_rows.append({"card_no": m_card.group(1).strip(), "card_id": card_id, "account_name": f"CARD {card_id}", "credit_limit": "0.00", "balance": "0.00", "min_payment": "0.00", "previous_balance": "0.00", "total_balance_calc": "0.00", "transaction_count": 0, "transactions": []})
+                card_map[card_id] = len(data_rows) - 1
+            tid = card_map[card_id]; m_lim = re.search(r'วงเงิน\s+([\d,]+)', section)
+            if m_lim: data_rows[tid]["credit_limit"] = m_lim.group(1).replace(',', '')
+            txn_lines = section.split('\n')
+            for i, line in enumerate(txn_lines):
+                # Flexible pattern for BBL: Date Time? PostDate Seq? Account? Desc... Amount Balance?
+                # Case 1: Complex row with up to 10 groups (standard BBL layout)
+                m_txn = re.search(r'(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})?\s*(\d{2}/\d{2}/\d{4})\s+(\d+)\s+(.*?)\s+(\d+)\s+(.*?)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})', line)
+                if m_txn:
+                    main_desc, product, amount = m_txn.group(5).strip(), m_txn.group(7).strip(), m_txn.group(10)
+                    sub = []
+                    for j in range(1, 4):
+                        if i+j < len(txn_lines):
+                            nl = txn_lines[i+j].strip()
+                            if re.match(r'\d{2}/\d{2}/\d{4}', nl) or "ยอดเงินรวม" in nl or "PAYMENT" in nl: break
+                            sub.append(nl)
+                    
+                    # --- Smarter Splitting for Desc, Branch, Type ---
+                    all_text_pool = [main_desc] + sub
+                    fuel_keys = ["DIESEL", "ดีเซล", "G-95", "G-91", "G95", "G91", "GASOHOL", "UGR", "D-B7", "D-B10", "D B7", "D B10", "BENZINE", "เบนซิน"]
+                    branch_keys = ["NAKORN", "KORAT", "นครราชสีมา", "TH", "BANGKOK", "กรุงเทพ", "SARABURI", "สระบุรี", "BURIRAM", "บุรีรัมย์", "MANGMENT", "ROAD"]
+                    
+                    final_desc_parts = []
+                    final_branch = ""
+                    final_type = product if (product and product != "0" and len(product) > 2) else ""
+                    
+                    for token in all_text_pool:
+                        tok_up = token.upper()
+                        if any(f in tok_up for f in fuel_keys):
+                            final_type = token
+                        elif any(b in tok_up for b in branch_keys):
+                            # Special case: if it has CO., or LTD it's likely desc even if it has area words
+                            if "CO.," in tok_up or "LTD" in tok_up:
+                                final_desc_parts.append(token)
+                            else:
+                                final_branch = token
+                        else:
+                            final_desc_parts.append(token)
+                    
+                    # Fallback: if branch is still empty and we have multiple desc parts, check the last one
+                    if not final_branch and len(final_desc_parts) > 1:
+                         last_desc = final_desc_parts[-1]
+                         if len(last_desc) < 25: # Branch tends to be shorter
+                             final_branch = last_desc
+                             final_desc_parts.pop()
+
+                    desc_str = " ".join(final_desc_parts).strip()
+                    data_rows[tid]["transactions"].append({
+                        "date": m_txn.group(1), 
+                        "post_date": m_txn.group(3), 
+                        "desc": desc_str, 
+                        "branch": final_branch.strip(), 
+                        "type": final_type, 
+                        "amount": amount
+                    })
+                else:
+                    # Case 2: Simple fallback row (Date PostDate Description Amount)
+                    m_sim = re.search(r'^(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})\s+(.*?)\s+([\d,]+\.\d{2})\s*$', line)
+                    if m_sim:
+                        data_rows[tid]["transactions"].append({
+                            "date": m_sim.group(1), 
+                            "post_date": m_sim.group(2), 
+                            "desc": m_sim.group(3).strip(), 
+                            "branch": "", 
+                            "type": "เติมน้ำมัน", 
+                            "amount": m_sim.group(4)
+                        })
+                pmt = re.search(r'(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})\s+PAYMENT\s+([\d,]+\.\d{2}-)', line)
+                if pmt: data_rows[tid]["transactions"].append({"date": pmt.group(1), "post_date": pmt.group(2), "desc": "ชำระเงินคืน", "branch": "", "type": "ชำระเงิน", "amount": pmt.group(3).replace('-', '')})
+            m_foot = re.search(r'ยอดเงินรวม.*?\(Total.*?Amount\)\s*([\d,]+\.\d{2})', section, re.IGNORECASE)
+            if m_foot: data_rows[tid]["balance"] = data_rows[tid]["total_balance_calc"] = m_foot.group(1).replace(',', '')
+            data_rows[tid]["transaction_count"] = len(data_rows[tid]["transactions"])
+    return {"data": data_rows, "summary": {"previous_balance": global_prev_bal, "current_total": global_curr_total}}
 
 @app.get("/upload-slip-progress")
-def get_slip_progress(task_id: str):
-    data = progress_store.get(task_id)
-    if not data:
-        return {"current": 0, "total": 0}
-    return data
+def get_slip_progress(task_id: str): return progress_store.get(task_id, {"current": 0, "total": 0})
 
 @app.post("/upload-slip")
 def upload_slip(file: UploadFile = File(...), task_id: str = None):
-    lower = (file.filename or "").lower()
-    if not (lower.endswith(".pdf") or lower.endswith(".png") or lower.endswith(".jpg") or lower.endswith(".jpeg") or lower.endswith(".webp")):
-        raise HTTPException(status_code=400, detail="Only PDF or image files are supported.")
-
     try:
-        content = file.file.read()
-        extracted = extract_slip_preview(file.filename, content, task_id)
+        content = file.file.read(); extracted = extract_slip_preview(file.filename, content, task_id)
         return {"filename": file.filename, **extracted}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/records")
+def get_records():
+    conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row; c = conn.cursor()
+    c.execute("SELECT id, name, date, type, data, hidden, created_at FROM records WHERE hidden = 0 ORDER BY created_at DESC")
+    rows = c.fetchall(); results = []
+    for r in rows:
+        try: results.append({**json.loads(r["data"]), "created_at": r["created_at"], "hidden": r["hidden"]})
+        except: pass
+    conn.close(); return results
+
+@app.get("/api/records/{id}")
+def get_record_detail(id: str):
+    conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row; c = conn.cursor()
+    c.execute("SELECT data FROM records WHERE id = ?", (id,)); r = c.fetchone()
+    if not r: conn.close(); raise HTTPException(status_code=404, detail="Not found")
+    record = json.loads(r["data"])
+    c.execute("SELECT data FROM slip_blobs WHERE id = ?", (id,)); sb = c.fetchone()
+    if sb: record["slipResult"] = json.loads(sb["data"])
+    conn.close(); return record
+
+@app.post("/api/records")
+async def save_record(record: dict):
+    rid = record.get("id"); slip = record.pop("slipResult", None); conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("SELECT hidden FROM records WHERE id = ?", (rid,)); ex = c.fetchone(); hid = ex[0] if ex else 0
+    c.execute("INSERT OR REPLACE INTO records (id, name, date, type, data, hidden) VALUES (?, ?, ?, ?, ?, ?)", (rid, record.get("name"), record.get("date"), record.get("type"), json.dumps(record), hid))
+    if slip: c.execute("INSERT OR REPLACE INTO slip_blobs (id, data) VALUES (?, ?)", (rid, json.dumps(slip)))
+    else: c.execute("DELETE FROM slip_blobs WHERE id = ?", (rid,))
+    conn.commit(); conn.close(); return {"status": "success", "id": rid}
+
+@app.delete("/api/records/{id}")
+def delete_record(id: str):
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor(); c.execute("UPDATE records SET hidden = 1 WHERE id = ?", (id,)); conn.commit(); conn.close(); return {"status": "hidden"}
 
 if __name__ == "__main__":
     import uvicorn
-
-    _port = int(os.environ.get("PORT", "5004"))
-    _host = os.environ.get("HOST", "127.0.0.1")
-
-    # API สำหรับจัดการข้อมูลถาวร (SQLite)
-    @app.get("/api/records")
-    def get_records():
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-        c.execute("SELECT id, name, date, type, data, created_at FROM records ORDER BY created_at DESC")
-        rows = c.fetchall()
-        
-        results = []
-        for r in rows:
-            record_data = json.loads(r["data"])
-            # รวม metadata พื้นฐาน
-            results.append({
-                **record_data,
-                "created_at": r["created_at"]
-            })
-        conn.close()
-        return results
-
-    @app.get("/api/records/{id}")
-    def get_record_detail(id: str):
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-        
-        # ดึง Metadata
-        c.execute("SELECT data FROM records WHERE id = ?", (id,))
-        r = c.fetchone()
-        if not r:
-            conn.close()
-            raise HTTPException(status_code=404, detail="Record not found")
-        
-        record = json.loads(r["data"])
-        
-        # ดึงรูปสลิปและผล OCR เต็ม
-        c.execute("SELECT data FROM slip_blobs WHERE id = ?", (id,))
-        sb = c.fetchone()
-        if sb:
-            record["slipResult"] = json.loads(sb["data"])
-            
-        conn.close()
-        return record
-
-    @app.post("/api/records")
-    async def save_record(record: dict):
-        record_id = record.get("id")
-        if not record_id:
-            raise HTTPException(status_code=400, detail="Missing record id")
-        
-        # แยก slipResult ออกไปเก็บใน blobs เพื่อไม่ให้ไฟล์ข้อมูลหลักใหญ่เกินไป
-        full_slip_result = record.pop("slipResult", None)
-        
-        name = record.get("name", "รายการใหม่")
-        date = record.get("date", "")
-        type_ = record.get("type", "manual")
-        data_json = json.dumps(record)
-        
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        
-        # Save Metadata
-        c.execute("INSERT OR REPLACE INTO records (id, name, date, type, data) VALUES (?, ?, ?, ?, ?)",
-                  (record_id, name, date, type_, data_json))
-        
-        # Save Slip Blobs (ถ้ามี)
-        if full_slip_result:
-            c.execute("INSERT OR REPLACE INTO slip_blobs (id, data) VALUES (?, ?)",
-                      (record_id, json.dumps(full_slip_result)))
-        
-        conn.commit()
-        conn.close()
-        return {"status": "success", "id": record_id}
-
-    @app.delete("/api/records/{id}")
-    def delete_record(id: str):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("DELETE FROM records WHERE id = ?", (id,))
-        c.execute("DELETE FROM slip_blobs WHERE id = ?", (id,))
-        conn.commit()
-        conn.close()
-        return {"status": "deleted"}
-
-    uvicorn.run(app, host=_host, port=_port)
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("PORT", "5004")))

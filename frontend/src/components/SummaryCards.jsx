@@ -31,7 +31,13 @@ const formatBaht = (n) => {
     );
 };
 
-const SummaryCards = ({ result, totalTransactions, totalAmount }) => {
+const SummaryCards = ({ 
+    result, 
+    totalTransactions, 
+    totalAmount,
+    amountLabel = "ยอดคงค้างรวม",
+    amountSublabel = "ผลรวม balance จากทุกบัตร"
+}) => {
     const cardCount = result?.count ?? result?.data?.length ?? 0;
 
     return (
@@ -72,13 +78,13 @@ const SummaryCards = ({ result, totalTransactions, totalAmount }) => {
                         <Wallet className="w-5 h-5 text-amber-700" />
                     </div>
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                        ยอดคงค้างรวม
+                        {amountLabel}
                     </span>
                 </div>
                 <p className="text-2xl sm:text-3xl font-extrabold text-slate-900 font-display tabular-nums break-all">
                     <CountUp end={totalAmount} formatter={formatBaht} />
                 </p>
-                <p className="text-sm text-slate-500 mt-1">ผลรวม balance จากทุกบัตร</p>
+                <p className="text-sm text-slate-500 mt-1">{amountSublabel}</p>
             </div>
         </div>
     );

@@ -85,7 +85,7 @@ const RecordsListPage = () => {
     };
 
     const handleDeleteRecord = async (id) => {
-        if (window.confirm('คุณแน่ใจหรือไม่ว่าต้องการลบรายการนี้?')) {
+        if (window.confirm('คุณแน่ใจหรือไม่ว่าต้องการซ่อนรายการนี้ออกจากรายการ?')) {
             setIsLoading(true);
             await deleteRecord(id);
             await loadRecords();
@@ -98,7 +98,7 @@ const RecordsListPage = () => {
     };
 
     const filteredRecords = records.filter(r => 
-        r.filename.toLowerCase().includes(searchTerm.toLowerCase())
+        (r.filename || r.name || "").toLowerCase().includes(searchTerm.toLowerCase())
     );
 
     const formatDate = (dateString) => {
@@ -145,8 +145,8 @@ const RecordsListPage = () => {
             <main className="max-w-[1200px] mx-auto px-6 py-10 page-transition">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
                     <div>
-                        <h1 className="text-3xl font-bold text-slate-900 mb-2">รายการทั้งหมด</h1>
-                        <p className="text-slate-500">จัดการข้อมูลรายการและการตรวจสอบสลิปของคุณ</p>
+                        <h1 className="text-3xl font-bold text-slate-900 mb-2">รายการทั้งหมด (Soft Delete)</h1>
+                        <p className="text-slate-500">จัดการข้อมูลรายการและการตรวจสอบสลิปของคุณ (ระบบซ่อนข้อมูล)</p>
                     </div>
                     
                     <button 
@@ -239,7 +239,10 @@ const RecordsListPage = () => {
                                                      </div>
                                                  ) : (
                                                      <button
-                                                         onClick={() => navigate(`/upload/${record.id}`)}
+                                                         onClick={() => {
+                                                             const bank = record.filename.startsWith('BBL') ? 'bbl' : 'kbank';
+                                                             navigate(`/setup-statement/${bank}/${record.id}`);
+                                                         }}
                                                          className="w-10 h-10 mx-auto flex items-center justify-center rounded-xl bg-slate-50 border border-slate-100 text-slate-400 hover:text-blue-600 hover:border-blue-200 hover:bg-blue-50 transition-all active:scale-90"
                                                          title="อัปโหลดใบแจ้งยอด"
                                                      >
@@ -266,7 +269,10 @@ const RecordsListPage = () => {
                                                         <Pencil size={18} />
                                                     </button>
                                                     <button 
-                                                        onClick={() => navigate(`/dashboard/${record.id}`)}
+                                                        onClick={() => {
+                                                            const bank = record.filename.startsWith('BBL') ? 'bbl' : 'kbank';
+                                                            navigate(`/dashboard/${bank}/${record.id}`);
+                                                        }}
                                                         className="w-10 h-10 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-emerald-600 hover:border-emerald-200 hover:bg-emerald-50 transition-all active:scale-90"
                                                         title="ดูรายละเอียด"
                                                     >
@@ -274,8 +280,8 @@ const RecordsListPage = () => {
                                                     </button>
                                                     <button 
                                                         onClick={() => handleDeleteRecord(record.id)}
-                                                        className="w-10 h-10 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 transition-all active:scale-90"
-                                                        title="ลบ"
+                                                        className="w-10 h-10 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300 hover:bg-slate-50 transition-all active:scale-90"
+                                                        title="ซ่อน"
                                                     >
                                                         <Trash2 size={18} />
                                                     </button>
@@ -285,7 +291,7 @@ const RecordsListPage = () => {
                                     ))
                                 ) : (
                                     <tr>
-                                        <td colSpan="5" className="px-6 py-20 text-center">
+                                        <td colSpan="8" className="px-6 py-20 text-center">
                                             <div className="flex flex-col items-center gap-4">
                                                 <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center text-slate-300">
                                                     <Search size={32} />
@@ -320,7 +326,7 @@ const RecordsListPage = () => {
                                     <label className="block text-sm font-bold text-slate-700 mb-1">ธนาคาร</label>
                                     <select value={newBank} onChange={(e) => { const b = e.target.value; setNewBank(b); setNewComp(companies[b][0]); }} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
                                         <option value="KBANK">กสิกร (KBANK)</option>
-                                        <option value="BBL">กรุงเทพ (BBL)</option>
+                                        <option value="BBL" disabled>กรุงเทพ (BBL) - ปิดปรับปรุง</option>
                                     </select>
                                 </div>
                                 <div>
@@ -362,7 +368,7 @@ const RecordsListPage = () => {
                                     <label className="block text-sm font-bold text-slate-700 mb-1">ธนาคาร</label>
                                     <select value={newBank} onChange={(e) => { const b = e.target.value; setNewBank(b); setNewComp(companies[b][0]); }} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
                                         <option value="KBANK">กสิกร (KBANK)</option>
-                                        <option value="BBL">กรุงเทพ (BBL)</option>
+                                        <option value="BBL" disabled>กรุงเทพ (BBL) - ปิดปรับปรุง</option>
                                     </select>
                                 </div>
                                 <div>

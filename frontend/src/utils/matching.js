@@ -1,30 +1,43 @@
 // Utilities to match slip pages to statement transactions
 
-function normalizeAmount(value) {
+export function normalizeAmount(value) {
   const s = (value ?? '').toString().replace(/,/g, '').trim();
   const n = parseFloat(s);
   return Number.isNaN(n) ? null : n.toFixed(2);
 }
 
-function normalizeDate(value) {
+export function normalizeDate(value) {
   const s = (value ?? '').toString().trim();
+  // Match d/m/y or d-m-y (y can be 2 or 4 digits)
   const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
   if (!m) return null;
   const [, d, mo, y] = m;
-  const yy = y.length === 4 ? y.slice(-2) : y;
+  
+  let yearNum = parseInt(y, 10);
+  // Convert Thai BE year to AD year (e.g. 2569 -> 2026)
+  if (yearNum >= 2500) {
+    yearNum -= 543;
+  } else if (yearNum < 100) {
+    // Handle 2-digit years (assume 20xx for 00-99)
+    yearNum += 2000;
+  }
+  
+  const yearStr = yearNum.toString();
+  const yy = yearStr.length >= 2 ? yearStr.slice(-2) : yearStr.padStart(2, '0');
+  
   return `${d.padStart(2, '0')}/${mo.padStart(2, '0')}/${yy}`;
 }
 
-function extractMerchantKeywords(merchant = '') {
+export function extractMerchantKeywords(merchant = '') {
   const cleaned = merchant.replace(/^PTTST\.?D_|^PTTRM_/, '').toUpperCase();
   const stop = new Set(['TRACE', 'APPR', 'TID', 'DATE', 'TIME', 'RRN', 'REF', 'STAN', 'NAKORNRATSIMA', 'MAKORNRATSIMA']);
   return cleaned
     .split(/[\s_]+/)
-    .map((k) => (k || '').replace(/[^A-Z]/g, ''))
+    .map((k) => (k || '').replace(/[^A-Z0-9ก-๙]/g, ''))
     .filter((k) => k.length >= 3 && !stop.has(k));
 }
 
-function last4FromCardNo(cardNo = '') {
+export function last4FromCardNo(cardNo = '') {
   return (cardNo || '').replace(/\D/g, '').slice(-4) || null;
 }
 
@@ -141,4 +154,3 @@ export function buildCoverageSummary(result, slipResult) {
     unmatched,
   };
 }
-

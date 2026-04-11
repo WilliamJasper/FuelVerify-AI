@@ -1,0 +1,106 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base theme and refined aesthetics */
+:root {
+  font-family: 'Plus Jakarta Sans', 'Sarabun', system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Luxury Glassmorphism Utility */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.75);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+/* Premium Gradients */
+.gradient-border-kbank {
+  background: linear-gradient(to right, #00A950, #86EFAC, #BBF7D0);
+  padding: 1px;
+}
+
+.gradient-border-bbl {
+  background: linear-gradient(to right, #003399, #60A5FA, #E0F2FE);
+  padding: 1px;
+}
+
+/* Ocean background (soft) + subtle pattern overlay */
+.ocean-bg {
+  position: relative;
+  isolation: isolate;
+  background-color: #ffffff;
+  background-image:
+    linear-gradient(
+      180deg,
+      rgba(240, 249, 255, 0.6) 0%,
+      rgba(248, 250, 252, 1) 100%
+    );
+  background-attachment: fixed;
+}
+
+.ocean-bg::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle at 20% 30%, rgba(14, 165, 233, 0.04) 0%, transparent 50%),
+    radial-gradient(circle at 80% 70%, rgba(16, 185, 129, 0.04) 0%, transparent 50%);
+  background-size: 100% 100%;
+}
+
+/* Enter Animations - KBANK (Green) */
+.kbank-fade-in { animation: entranceUp 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+.kbank-fade-in-delay-1 { opacity: 0; animation: entranceUp 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) 0.1s forwards; }
+.kbank-fade-in-delay-2 { opacity: 0; animation: entranceUp 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) 0.2s forwards; }
+.kbank-fade-in-delay-3 { opacity: 0; animation: entranceUp 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) 0.3s forwards; }
+
+/* Enter Animations - BBL (Blue) */
+.bbl-fade-in { animation: entranceUp 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) forwards; }
+.bbl-fade-in-delay-1 { opacity: 0; animation: entranceUp 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) 0.1s forwards; }
+.bbl-fade-in-delay-2 { opacity: 0; animation: entranceUp 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) 0.2s forwards; }
+.bbl-fade-in-delay-3 { opacity: 0; animation: entranceUp 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) 0.3s forwards; }
+
+/* Shared Keyframes */
+@keyframes entranceUp {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.page-transition {
+  animation: pageFadeInUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes pageFadeInUp {
+  0% { opacity: 0; transform: translateY(12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.hover-lift {
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+}
+
+.hover-lift:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 24px -8px rgba(0, 0, 0, 0.1);
+}
