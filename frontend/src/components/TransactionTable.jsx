@@ -44,13 +44,16 @@ const TransactionTable = ({ card, txnMatchStatus, slipResult, bank = 'kbank' }) 
                 <tr>
                     <th className="px-8 py-6 w-16 text-center">#</th>
                     <th className="px-8 py-6">{bank === 'bbl' ? 'วันที่ทำรายการ' : 'วันที่ใช้บัตร'}</th>
+                    {bank === 'bbl' && <th className="px-8 py-6">เวลา</th>}
                     <th className="px-8 py-6">วันที่บันทึก</th>
                     <th className="px-8 py-6 min-w-[200px]">รายการ</th>
-                    <th className="px-8 py-6 whitespace-nowrap">
-                        <div className="flex items-center gap-2">
-                            <MapPin className="w-4 h-4 text-slate-400" /> สาขา
-                        </div>
-                    </th>
+                    {bank !== 'bbl' && (
+                        <th className="px-8 py-6 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                                <MapPin className="w-4 h-4 text-slate-400" /> สาขา
+                            </div>
+                        </th>
+                    )}
                     <th className="px-8 py-6">ประเภท</th>
                     <th className="px-8 py-6 text-right">ยอดเงิน (บาท)</th>
                 </tr>
@@ -106,6 +109,11 @@ const TransactionTable = ({ card, txnMatchStatus, slipResult, bank = 'kbank' }) 
                             <td className={`px-8 py-4 text-base font-bold ${textMainClass}`}>
                                 {txn.date}
                             </td>
+                            {bank === 'bbl' && (
+                                <td className={`px-8 py-4 text-base font-bold ${textMainClass}`}>
+                                    {txn.time || '-'}
+                                </td>
+                            )}
                             <td className={`px-8 py-4 text-base ${textSubClass}`}>{txn.post_date}</td>
                             <td className={`px-8 py-4 text-base font-semibold ${textDescClass} align-top`}>
                                 <div className="flex items-center gap-3 min-w-0">
@@ -147,13 +155,18 @@ const TransactionTable = ({ card, txnMatchStatus, slipResult, bank = 'kbank' }) 
                                         </div>
                                     )}
                                     <span className="whitespace-nowrap" title={txn.desc}>
-                                        {descWithoutBranch}
+                                        {bank === 'bbl' 
+                                          ? (txn.branch ? `${txn.desc} ${txn.branch}` : txn.desc)
+                                          : descWithoutBranch
+                                        }
                                     </span>
                                 </div>
                             </td>
-                            <td className={`px-8 py-4 text-base font-semibold align-top whitespace-nowrap ${textDescClass}`}>
-                                {branch || '-'}
-                            </td>
+                            {bank !== 'bbl' && (
+                                <td className={`px-8 py-4 text-base font-semibold align-top whitespace-nowrap ${textDescClass}`}>
+                                    {branch || '-'}
+                                </td>
+                            )}
                             <td className="px-8 py-4 align-top">
                                 <span
                                     className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider border whitespace-nowrap ${
@@ -191,7 +204,7 @@ const TransactionTable = ({ card, txnMatchStatus, slipResult, bank = 'kbank' }) 
                 {(!card.transactions || card.transactions.length === 0) && (
                     <tr>
                         <td
-                            colSpan="7"
+                            colSpan={bank === 'bbl' ? "7" : "7"}
                             className="px-8 py-16 text-center text-slate-600 font-bold italic tracking-widest uppercase"
                         >
                             ไม่พบรายการเคลื่อนไหวในรอบบิลนี้

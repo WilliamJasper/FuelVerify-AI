@@ -36,16 +36,24 @@ const SummaryCards = ({
     totalTransactions, 
     totalAmount,
     amountLabel = "ยอดคงค้างรวม",
-    amountSublabel = "ผลรวม balance จากทุกบัตร"
+    amountSublabel = "ผลรวม balance จากทุกบัตร",
+    bank = 'kbank'
 }) => {
+    const isBBL = bank === 'bbl';
     const cardCount = result?.count ?? result?.data?.length ?? 0;
+    
+    // Theme colors
+    const cardColor = 'blue';
+    const txColor = 'emerald';
+    const amountColor = 'amber';
+    const amountText = 'amber-700';
 
     return (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
-                        <CreditCard className="w-5 h-5 text-blue-600" />
+                    <div className={`w-10 h-10 rounded-xl bg-${cardColor}-100 flex items-center justify-center`}>
+                        <CreditCard className={`w-5 h-5 text-${cardColor}-600`} />
                     </div>
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
                         บัตรในใบแจ้งยอด
@@ -59,8 +67,8 @@ const SummaryCards = ({
 
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center">
-                        <ListOrdered className="w-5 h-5 text-emerald-600" />
+                    <div className={`w-10 h-10 rounded-xl bg-${txColor}-100 flex items-center justify-center`}>
+                        <ListOrdered className={`w-5 h-5 text-${txColor}-600`} />
                     </div>
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
                         รายการรวม
@@ -74,8 +82,8 @@ const SummaryCards = ({
 
             <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                 <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center">
-                        <Wallet className="w-5 h-5 text-amber-700" />
+                    <div className={`w-10 h-10 rounded-xl bg-${amountColor}-100 flex items-center justify-center`}>
+                        <Wallet className={`w-5 h-5 text-${amountText}`} />
                     </div>
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
                         {amountLabel}

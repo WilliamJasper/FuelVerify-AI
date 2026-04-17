@@ -57,9 +57,15 @@ export default function SummarySection({ result, slipResult, bank = 'kbank' }) {
   const filteredUnmatched = useMemo(() => {
     if (!result) return [];
     const baseSorted = [...summary.unmatched].sort((a, b) => {
-      const aVip = vipNumberFromLabel(cardLabel(a.card, bank));
-      const bVip = vipNumberFromLabel(cardLabel(b.card, bank));
-      if (aVip !== bVip) return aVip - bVip;
+      if (bank === 'bbl') {
+        const aId = parseInt(String(a.card?.card_id || '0').replace(/\D/g, ''), 10);
+        const bId = parseInt(String(b.card?.card_id || '0').replace(/\D/g, ''), 10);
+        if (aId !== bId) return aId - bId;
+      } else {
+        const aVip = vipNumberFromLabel(cardLabel(a.card, bank));
+        const bVip = vipNumberFromLabel(cardLabel(b.card, bank));
+        if (aVip !== bVip) return aVip - bVip;
+      }
       return String(a.txn?.date || '').localeCompare(String(b.txn?.date || ''));
     });
     const q = query.trim().toLowerCase();
@@ -139,14 +145,29 @@ export default function SummarySection({ result, slipResult, bank = 'kbank' }) {
   };
 
   const exportUnmatchedExcel = () => {
-    const header = ['ลำดับ', bank === 'bbl' ? 'หมายเลขบัตร' : 'ชื่อบัตร', 'วันที่', 'รายการ', 'สาขา'];
-    const rows = filteredUnmatched.map(({ txn, card }, idx) => ([
-      idx + 1,
-      cardLabel(card, bank),
-      txn?.date || '—',
-      stripBranchFromDesc(txn?.desc),
-      extractBranch(txn?.desc),
-    ]));
+    const isBBL = bank === 'bbl';
+    const header = isBBL 
+      ? ['ลำดับ', 'หมายเลขบัตร', 'วันที่', 'เวลา', 'รายการ']
+      : ['ลำดับ', 'ชื่อบัตร', 'วันที่', 'รายการ', 'สาขา'];
+      
+    const rows = filteredUnmatched.map(({ txn, card }, idx) => {
+      if (isBBL) {
+        return [
+          idx + 1,
+          cardLabel(card, bank),
+          txn?.date || '—',
+          txn?.time || '—',
+          txn?.branch ? `${txn.desc} ${txn.branch}` : (txn?.desc || '—')
+        ];
+      }
+      return [
+        idx + 1,
+        cardLabel(card, bank),
+        txn?.date || '—',
+        stripBranchFromDesc(txn?.desc),
+        extractBranch(txn?.desc),
+      ];
+    });
 
     const wb = XLSX.utils.book_new();
     // สร้างเป็นตารางชัดเจน: header แถวแรก + data ต่อท้าย
@@ -156,7 +177,9 @@ export default function SummarySection({ result, slipResult, bank = 'kbank' }) {
     ws['!autofilter'] = { ref: 'A1:E1' };
 
     // ให้คอลัมน์กว้างพออ่านง่าย (ตารางหลัก)
-    ws['!cols'] = [{ wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 48 }, { wch: 20 }];
+    ws['!cols'] = isBBL 
+      ? [{ wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 55 }]
+      : [{ wch: 8 }, { wch: 14 }, { wch: 12 }, { wch: 48 }, { wch: 20 }];
 
     // Style ให้เหมือน “ตาราง” แบบในตัวอย่าง (หัวฟ้า เส้นขอบทุกช่อง)
     const range = XLSX.utils.decode_range(ws['!ref'] || 'A1:E1');
@@ -178,8 +201,8 @@ export default function SummarySection({ result, slipResult, bank = 'kbank' }) {
           border,
           alignment: {
             vertical: 'center',
-            horizontal: isHeader ? 'center' : (c === 3 ? 'left' : 'center'),
-            wrapText: c === 3,
+            horizontal: isHeader ? 'center' : (c === (isBBL ? 4 : 3) ? 'left' : 'center'),
+            wrapText: c === (isBBL ? 4 : 3),
           },
           font: isHeader ? { bold: true } : undefined,
           fill: isHeader
@@ -265,7 +288,9 @@ export default function SummarySection({ result, slipResult, bank = 'kbank' }) {
     }
 
     // ปรับความกว้างคอลัมน์ให้ summary อ่านง่ายขึ้นด้วย (สรุปใช้ A..E เหมือนกัน)
-    ws['!cols'] = [{ wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 48 }, { wch: 20 }];
+    ws['!cols'] = isBBL
+      ? [{ wch: 10 }, { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 55 }]
+      : [{ wch: 10 }, { wch: 14 }, { wch: 14 }, { wch: 48 }, { wch: 20 }];
 
     // ขยาย ref ให้ครอบคลุม summary ด้านล่าง
     const endRow = Math.max(range.e.r + 1, nameRow); // 1-based
@@ -283,14 +308,14 @@ export default function SummarySection({ result, slipResult, bank = 'kbank' }) {
 
   return (
     <section className="mt-16">
-    <div className="bg-gradient-to-r from-slate-200 via-sky-200 to-emerald-200 p-[1px] rounded-[34px] shadow-sm">
+    <div className={`bg-gradient-to-r from-slate-200 via-sky-100 to-${bank === 'bbl' ? 'blue-200' : 'emerald-100'} p-[1px] rounded-[34px] shadow-sm`}>
     <div className="bg-white rounded-[33px] p-6 md:p-8 border border-slate-100">
       <div className="flex items-center justify-between gap-3 mb-6">
         <div className="flex items-start gap-3">
-          <div className="w-1.5 h-6 bg-slate-400 rounded-full" />
+          <div className={`w-1.5 h-6 bg-${bank === 'bbl' ? 'blue-500' : 'slate-400'} rounded-full`} />
           <div className="flex flex-col">
             <div className="flex items-center gap-2">
-              <FileCheck2 className="w-5 h-5 text-slate-500" />
+              <FileCheck2 className={`w-5 h-5 text-${bank === 'bbl' ? 'blue-500' : 'slate-500'}`} />
               <h3 className="text-xl font-bold text-slate-800 font-display">สรุป</h3>
             </div>
             <p className="text-sm text-slate-600 mt-1">
@@ -501,8 +526,9 @@ export default function SummarySection({ result, slipResult, bank = 'kbank' }) {
                 <tr className="text-sm text-slate-600 border-b border-slate-200">
                   <th className="py-2 pr-4">{bank === 'bbl' ? 'หมายเลขบัตร' : 'ชื่อบัตร'}</th>
                   <th className="py-2 pr-4">วันที่</th>
+                  {bank === 'bbl' && <th className="py-2 pr-4">เวลา</th>}
                   <th className="py-2 pr-4">รายการ</th>
-                  <th className="py-2 pr-4">สาขา</th>
+                  {bank !== 'bbl' && <th className="py-2 pr-4">สาขา</th>}
                 </tr>
               </thead>
               <tbody className="text-sm">
@@ -512,10 +538,18 @@ export default function SummarySection({ result, slipResult, bank = 'kbank' }) {
                       {cardLabel(card, bank)}
                     </td>
                     <td className="py-2 pr-4">{txn.date || '—'}</td>
-                    <td className="py-2 pr-4">{stripBranchFromDesc(txn.desc)}</td>
-                    <td className="py-2 pr-4 text-slate-700">
-                      {extractBranch(txn.desc)}
+                    {bank === 'bbl' && <td className="py-2 pr-4">{txn.time || '—'}</td>}
+                    <td className="py-2 pr-4">
+                      {bank === 'bbl' 
+                        ? (txn.branch ? `${txn.desc} ${txn.branch}` : (txn.desc || '—'))
+                        : stripBranchFromDesc(txn.desc)
+                      }
                     </td>
+                    {bank !== 'bbl' && (
+                      <td className="py-2 pr-4 text-slate-700">
+                        {extractBranch(txn.desc)}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

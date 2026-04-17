@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  Plus, 
-  Pencil, 
-  Eye, 
-  Trash2, 
-  Search,
-  MoreVertical,
-  Calendar,
-  Clock,
-  ChevronRight,
-  FileText,
-  X
+import {
+    Plus,
+    Pencil,
+    Eye,
+    Trash2,
+    Search,
+    MoreVertical,
+    Calendar,
+    Clock,
+    ChevronRight,
+    FileText,
+    X
 } from 'lucide-react';
 import { listRecords, createRecordManual, deleteRecord, updateRecordName, updateRecordStatement } from '../utils/records.js';
 import Header from '../components/Header.jsx';
@@ -27,9 +27,14 @@ const RecordsListPage = () => {
 
     const [isLoading, setIsLoading] = useState(true);
 
+    const months = [
+        'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+        'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
+    ];
+
     const [newBank, setNewBank] = useState('KBANK');
     const [newComp, setNewComp] = useState('บจก. เอกสหกรุ๊ป');
-    const [newMonth, setNewMonth] = useState('มกราคม');
+    const [newMonth, setNewMonth] = useState(months[new Date().getMonth()]);
     const [newYear, setNewYear] = useState(new Date().getFullYear() + 543);
 
     const companies = {
@@ -43,11 +48,6 @@ const RecordsListPage = () => {
             'บจก. เอกสห จี มอเตอร์'
         ]
     };
-
-    const months = [
-        'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
-        'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
-    ];
 
     useEffect(() => {
         loadRecords();
@@ -97,24 +97,24 @@ const RecordsListPage = () => {
         setIsEditModalOpen(true);
     };
 
-    const filteredRecords = records.filter(r => 
+    const filteredRecords = records.filter(r =>
         (r.filename || r.name || "").toLowerCase().includes(searchTerm.toLowerCase())
     );
 
     const formatDate = (dateString) => {
         const date = new Date(dateString);
-        return date.toLocaleDateString('th-TH', { 
-            day: '2-digit', 
-            month: '2-digit', 
-            year: '2-digit' 
+        return date.toLocaleDateString('th-TH', {
+            day: '2-digit',
+            month: '2-digit',
+            year: '2-digit'
         });
     };
 
     const formatTime = (dateString) => {
         const date = new Date(dateString);
-        return date.toLocaleTimeString('th-TH', { 
-            hour: '2-digit', 
-            minute: '2-digit' 
+        return date.toLocaleTimeString('th-TH', {
+            hour: '2-digit',
+            minute: '2-digit'
         });
     };
 
@@ -145,11 +145,11 @@ const RecordsListPage = () => {
             <main className="max-w-[1200px] mx-auto px-6 py-10 page-transition">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
                     <div>
-                        <h1 className="text-3xl font-bold text-slate-900 mb-2">รายการทั้งหมด (Soft Delete)</h1>
-                        <p className="text-slate-500">จัดการข้อมูลรายการและการตรวจสอบสลิปของคุณ (ระบบซ่อนข้อมูล)</p>
+                        <h1 className="text-3xl font-bold text-slate-900 mb-2">รายการทั้งหมด</h1>
+                        <p className="text-slate-500">จัดการข้อมูลรายการและการตรวจสอบสลิปของคุณ</p>
                     </div>
-                    
-                    <button 
+
+                    <button
                         onClick={() => setIsCreateModalOpen(true)}
                         className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-xl font-semibold shadow-lg shadow-blue-200 transition-all active:scale-95"
                     >
@@ -194,9 +194,8 @@ const RecordsListPage = () => {
                                         <tr key={record.id} className="hover:bg-slate-50/50 transition-colors group">
                                             <td className="px-4 py-5">
                                                 <div className="flex items-center gap-2">
-                                                    <span className={`px-2 py-1 rounded-lg text-xs font-bold ${
-                                                        record.filename.startsWith('KBANK') ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
-                                                    }`}>
+                                                    <span className={`px-2 py-1 rounded-lg text-xs font-bold ${record.filename.startsWith('KBANK') ? 'bg-emerald-100 text-emerald-700' : 'bg-blue-100 text-blue-700'
+                                                        }`}>
                                                         {parseName(record.filename).bank}
                                                     </span>
                                                     {(record.isNew || isRecentlyCreated(record.createdAt)) && (
@@ -215,41 +214,41 @@ const RecordsListPage = () => {
                                             <td className="px-4 py-5 text-center font-bold text-slate-900">
                                                 {parseName(record.filename).year}
                                             </td>
-                                             <td className="px-4 py-5 text-center">
-                                                 {record.result ? (
-                                                     <div className="flex items-center justify-center gap-2 bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-lg border border-emerald-100 text-xs font-semibold max-w-[140px] mx-auto group/file relative">
-                                                         <FileText size={14} className="shrink-0" />
-                                                         <span className="truncate" title={record.result.filename || 'Statement'}>
-                                                             {record.result.filename || 'Statement'}
-                                                         </span>
-                                                         <button
-                                                             onClick={async (e) => {
-                                                                 e.stopPropagation();
-                                                                 if (window.confirm('ลบใบแจ้งยอดนี้ออกจากรายการหรือไม่?')) {
-                                                                     setIsLoading(true);
-                                                                     await updateRecordStatement(record.id, null);
-                                                                     await loadRecords();
-                                                                 }
-                                                             }}
-                                                             className="absolute -right-1.5 -top-1.5 w-5 h-5 bg-rose-500 text-white rounded-full flex items-center justify-center shadow-lg transform scale-0 group-hover/file:scale-100 transition-transform hover:bg-rose-600 active:scale-90"
-                                                             title="ลบใบแจ้งยอด"
-                                                         >
-                                                             <X size={12} />
-                                                         </button>
-                                                     </div>
-                                                 ) : (
-                                                     <button
-                                                         onClick={() => {
-                                                             const bank = record.filename.startsWith('BBL') ? 'bbl' : 'kbank';
-                                                             navigate(`/setup-statement/${bank}/${record.id}`);
-                                                         }}
-                                                         className="w-10 h-10 mx-auto flex items-center justify-center rounded-xl bg-slate-50 border border-slate-100 text-slate-400 hover:text-blue-600 hover:border-blue-200 hover:bg-blue-50 transition-all active:scale-90"
-                                                         title="อัปโหลดใบแจ้งยอด"
-                                                     >
-                                                         <FileText size={20} />
-                                                     </button>
-                                                 )}
-                                             </td>
+                                            <td className="px-4 py-5 text-center">
+                                                {record.result ? (
+                                                    <div className={`flex items-center justify-center gap-2 ${record.filename.startsWith('BBL') ? 'bg-blue-50 text-blue-700 border-blue-100' : 'bg-emerald-50 text-emerald-700 border-emerald-100'} px-3 py-1.5 rounded-lg border text-xs font-semibold max-w-[140px] mx-auto group/file relative`}>
+                                                        <FileText size={14} className="shrink-0" />
+                                                        <span className="truncate" title={record.result.filename || 'Statement'}>
+                                                            {record.result.filename || 'Statement'}
+                                                        </span>
+                                                        <button
+                                                            onClick={async (e) => {
+                                                                e.stopPropagation();
+                                                                if (window.confirm('ลบใบแจ้งยอดนี้ออกจากรายการหรือไม่?')) {
+                                                                    setIsLoading(true);
+                                                                    await updateRecordStatement(record.id, null);
+                                                                    await loadRecords();
+                                                                }
+                                                            }}
+                                                            className="absolute -right-1.5 -top-1.5 w-5 h-5 bg-rose-500 text-white rounded-full flex items-center justify-center shadow-lg transform scale-0 group-hover/file:scale-100 transition-transform hover:bg-rose-600 active:scale-90"
+                                                            title="ลบใบแจ้งยอด"
+                                                        >
+                                                            <X size={12} />
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <button
+                                                        onClick={() => {
+                                                            const bank = record.filename.startsWith('BBL') ? 'bbl' : 'kbank';
+                                                            navigate(`/setup-statement/${bank}/${record.id}`);
+                                                        }}
+                                                        className="w-10 h-10 mx-auto flex items-center justify-center rounded-xl bg-slate-50 border border-slate-100 text-slate-400 hover:text-blue-600 hover:border-blue-200 hover:bg-blue-50 transition-all active:scale-90"
+                                                        title="อัปโหลดใบแจ้งยอด"
+                                                    >
+                                                        <FileText size={20} />
+                                                    </button>
+                                                )}
+                                            </td>
                                             <td className="px-4 py-5 text-center">
                                                 <span className="text-slate-600 text-sm">{formatDate(record.createdAt)}</span>
                                             </td>
@@ -261,14 +260,14 @@ const RecordsListPage = () => {
                                             </td>
                                             <td className="px-4 py-5">
                                                 <div className="flex items-center justify-center gap-2">
-                                                    <button 
+                                                    <button
                                                         onClick={() => openEditModal(record)}
                                                         className="w-10 h-10 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-blue-600 hover:border-blue-200 hover:bg-blue-50 transition-all active:scale-90"
                                                         title="แก้ไข"
                                                     >
                                                         <Pencil size={18} />
                                                     </button>
-                                                    <button 
+                                                    <button
                                                         onClick={() => {
                                                             const bank = record.filename.startsWith('BBL') ? 'bbl' : 'kbank';
                                                             navigate(`/dashboard/${bank}/${record.id}`);
@@ -278,7 +277,7 @@ const RecordsListPage = () => {
                                                     >
                                                         <Eye size={18} />
                                                     </button>
-                                                    <button 
+                                                    <button
                                                         onClick={() => handleDeleteRecord(record.id)}
                                                         className="w-10 h-10 flex items-center justify-center rounded-xl bg-white border border-slate-200 text-slate-400 hover:text-slate-600 hover:border-slate-300 hover:bg-slate-50 transition-all active:scale-90"
                                                         title="ซ่อน"
@@ -299,7 +298,7 @@ const RecordsListPage = () => {
                                                 <div className="text-slate-400">
                                                     {searchTerm ? 'ไม่พบรายการที่ค้นหา' : 'ยังไม่มีรายการข้อมูลในขณะนี้'}
                                                 </div>
-                                                <button 
+                                                <button
                                                     onClick={() => setIsCreateModalOpen(true)}
                                                     className="text-blue-600 font-semibold hover:underline"
                                                 >
@@ -326,7 +325,7 @@ const RecordsListPage = () => {
                                     <label className="block text-sm font-bold text-slate-700 mb-1">ธนาคาร</label>
                                     <select value={newBank} onChange={(e) => { const b = e.target.value; setNewBank(b); setNewComp(companies[b][0]); }} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
                                         <option value="KBANK">กสิกร (KBANK)</option>
-                                        <option value="BBL" disabled>กรุงเทพ (BBL) - ปิดปรับปรุง</option>
+                                        <option value="BBL">กรุงเทพ (BBL)</option>
                                     </select>
                                 </div>
                                 <div>
@@ -368,7 +367,7 @@ const RecordsListPage = () => {
                                     <label className="block text-sm font-bold text-slate-700 mb-1">ธนาคาร</label>
                                     <select value={newBank} onChange={(e) => { const b = e.target.value; setNewBank(b); setNewComp(companies[b][0]); }} className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white">
                                         <option value="KBANK">กสิกร (KBANK)</option>
-                                        <option value="BBL" disabled>กรุงเทพ (BBL) - ปิดปรับปรุง</option>
+                                        <option value="BBL">กรุงเทพ (BBL)</option>
                                     </select>
                                 </div>
                                 <div>

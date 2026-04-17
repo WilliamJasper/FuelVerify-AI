@@ -421,6 +421,7 @@ const DashboardKBANK = () => {
                     result={result}
                     totalTransactions={totalTransactions}
                     totalAmount={totalAmount}
+                    bank="kbank"
                 />
 
                 <UploadSlip

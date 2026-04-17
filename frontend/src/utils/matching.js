@@ -1,5 +1,14 @@
 // Utilities to match slip pages to statement transactions
 
+export function normalizeTime(value) {
+  const s = (value ?? '').toString().trim();
+  // Match HH:mm:ss or HH:mm (e.g. 11:55:01 -> 11:55, 11:55 -> 11:55)
+  const m = s.match(/^(\d{1,2}):(\d{1,2})(?::\d{1,2})?$/);
+  if (!m) return null;
+  const [, h, min] = m;
+  return `${h.padStart(2, '0')}:${min.padStart(2, '0')}`;
+}
+
 export function normalizeAmount(value) {
   const s = (value ?? '').toString().replace(/,/g, '').trim();
   const n = parseFloat(s);
@@ -45,17 +54,20 @@ export function doesPageMatchTxn(page, card, txn) {
   if (!page || !txn) return { match: false };
   const pv = page.manualValues || page.correctedValues || page.values || {};
   const pageDate = normalizeDate(pv.date);
+  const pageTime = normalizeTime(pv.time);
   const pageAmt = normalizeAmount(pv.amount);
   const pageLast4 = (pv.last4 || '').toString();
   const pageMerchKws = extractMerchantKeywords(pv.merchant || '');
 
-  const txnDate = normalizeDate(txn.date);
+  const txnDate = normalizeDate(txn.trans_date || txn.date);
+  const txnTime = normalizeTime(txn.time);
   const txnAmt = normalizeAmount(txn.amount);
   const txnDesc = (txn.desc || '').toUpperCase();
   const cardL4 = last4FromCardNo(card?.card_no || '');
 
   const isLast4Match = pageLast4 ? cardL4 === pageLast4 : false;
   const dateOk = !!pageDate && !!txnDate && pageDate === txnDate;
+  const timeOk = !!pageTime && !!txnTime && pageTime === txnTime;
   const amtOk = !!pageAmt && !!txnAmt && pageAmt === txnAmt;
   const merchOk =
     pageMerchKws.length === 0 ||
@@ -64,6 +76,8 @@ export function doesPageMatchTxn(page, card, txn) {
   // Multi-pass like SlipPreview
   const hasMerchantKeywords = pageMerchKws.length > 0;
   const passes = [
+    timeOk && dateOk && amtOk && isLast4Match,
+    timeOk && dateOk && amtOk,
     isLast4Match && merchOk && dateOk && amtOk,
     !pageLast4 && merchOk && dateOk && amtOk,
     // ยอมข้าม merchant ได้เฉพาะตอนที่ OCR ไม่ได้ร้าน (keyword ว่าง)
@@ -76,6 +90,7 @@ export function doesPageMatchTxn(page, card, txn) {
   const match = passes.some(Boolean);
   const missing = {
     date: !dateOk,
+    time: !timeOk,
     amount: !amtOk,
     last4: pageLast4 ? !isLast4Match : true,
     merchant: !merchOk,
@@ -110,7 +125,7 @@ export function buildCoverageSummary(result, slipResult) {
     let bestMissingCount = Infinity;
     for (const p of pages) {
       const { match, missing } = doesPageMatchTxn(p, card, txn);
-      const missingCount = [missing.date, missing.amount, missing.last4, missing.merchant].filter(Boolean).length;
+      const missingCount = [missing.date, missing.time, missing.amount, missing.last4, missing.merchant].filter(Boolean).length;
       if (missingCount < bestMissingCount) {
         bestMissingCount = missingCount;
         bestMissing = missing;
@@ -138,6 +153,7 @@ export function buildCoverageSummary(result, slipResult) {
         txn,
         missing: bestMissing || {
           date: true,
+          time: true,
           amount: true,
           last4: true,
           merchant: true,

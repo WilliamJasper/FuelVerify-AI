@@ -635,10 +635,26 @@ def _parse_slip_text(ocr_text: str) -> dict:
         if not re.search(r'TOTAL', line, re.IGNORECASE):
             continue
 
-        # เคส "TOTAL ... AVAILABLE BALANCE 300.00 6,500.00" -> เอาตัวแรก
+        # เจาะจงหาตัวเลขที่อยู่หลังคำว่า TOTAL (เพื่อกันกรณี OCR รวมบรรทัดแล้วไปเอาเลขยอดคงเหลือด้านบนมา)
+        # เช่น "Approx monthly bal THB 4,500.00 TOTAL THB 500.00" -> ต้องได้ 500.00
+        match_after_total = re.search(r'TOTAL\s*:?\s*(?:THB)?\s*[\s\S]{0,30}?([\d,]+\.\d{2})', line, re.IGNORECASE)
+        if match_after_total:
+            amount = match_after_total.group(1)
+            # เช็คว่ายอดที่ได้ ไม่ใช่ยอด Approx (ถ้ามีคำต้องห้ามในประโยคเดียวกัน)
+            if re.search(r'Approx|monthly|Daily', line, re.IGNORECASE):
+                # ถ้าเจอคำต้องห้าม ต้องเช็คว่าคำนั้นไม่อยู่ชิดกับตัวเลขที่เลือกมากเกินไป
+                forbidden_match = re.search(r'(?:Approx|monthly|Daily)[\s\S]{0,10}?' + re.escape(amount), line, re.IGNORECASE)
+                if forbidden_match:
+                    amount = None
+                    continue
+            if amount:
+                break
+
+        # Fallback เดิมกรณี pattern ด้านบนหลุด (ยังคงใช้ nums_in_line แต่กรองข้อมูล)
         if re.search(r'AVAILABLE\s+BALANCE', line, re.IGNORECASE):
             nums_in_line = re.findall(r'([\d,]+\.\d{2})', line)
             if len(nums_in_line) >= 2:
+                # ถ้ามี 2 เลขในบรรทัดเดียวกันที่มี AVAILABLE BALANCE รูปแบบ BBL มักเป็น [TOTAL, BALANCE]
                 amount = nums_in_line[0]
                 break
             # เคส OCR ทั่วไป: TOTAL : THB ** 500.00 AVAILABLE BALANCE (ไม่มีเลข balance ต่อท้าย)
@@ -654,9 +670,9 @@ def _parse_slip_text(ocr_text: str) -> dict:
             continue
 
         # เคส "TOTAL : THB 500.00"
-        nums_in_line = re.findall(r'([\d,]+\.\d{2})', line)
-        if nums_in_line:
-            amount = nums_in_line[0]
+        match_final = re.search(r'TOTAL\s*:?\s*(?:THB)?\s*[\s\S]{0,30}?([\d,]+\.\d{2})', line, re.IGNORECASE)
+        if match_final:
+            amount = match_final.group(1)
             break
 
         # เคส TOTAL อยู่บรรทัดบน, ตัวเลขอยู่บรรทัดถัดไป (แต่ต้องไม่ใช่บรรทัด balance)
@@ -1582,41 +1598,35 @@ def extract_bbl_ocr(pdf_bytes):
                             if re.match(r'\d{2}/\d{2}/\d{4}', nl) or "ยอดเงินรวม" in nl or "PAYMENT" in nl: break
                             sub.append(nl)
                     
-                    # --- Smarter Splitting for Desc, Branch, Type ---
+                    # --- Simple Unification for Desc, Type ---
                     all_text_pool = [main_desc] + sub
                     fuel_keys = ["DIESEL", "ดีเซล", "G-95", "G-91", "G95", "G91", "GASOHOL", "UGR", "D-B7", "D-B10", "D B7", "D B10", "BENZINE", "เบนซิน"]
-                    branch_keys = ["NAKORN", "KORAT", "นครราชสีมา", "TH", "BANGKOK", "กรุงเทพ", "SARABURI", "สระบุรี", "BURIRAM", "บุรีรัมย์", "MANGMENT", "ROAD"]
                     
-                    final_desc_parts = []
-                    final_branch = ""
                     final_type = product if (product and product != "0" and len(product) > 2) else ""
+                    # Flatten all text into a list of words to check each one
+                    raw_combined = " ".join(all_text_pool)
+                    words = raw_combined.split()
                     
-                    for token in all_text_pool:
-                        tok_up = token.upper()
-                        if any(f in tok_up for f in fuel_keys):
-                            final_type = token
-                        elif any(b in tok_up for b in branch_keys):
-                            # Special case: if it has CO., or LTD it's likely desc even if it has area words
-                            if "CO.," in tok_up or "LTD" in tok_up:
-                                final_desc_parts.append(token)
-                            else:
-                                final_branch = token
-                        else:
-                            final_desc_parts.append(token)
-                    
-                    # Fallback: if branch is still empty and we have multiple desc parts, check the last one
-                    if not final_branch and len(final_desc_parts) > 1:
-                         last_desc = final_desc_parts[-1]
-                         if len(last_desc) < 25: # Branch tends to be shorter
-                             final_branch = last_desc
-                             final_desc_parts.pop()
+                    final_words = []
+                    for word in words:
+                        w_up = word.upper()
+                        if any(f in w_up for f in fuel_keys):
+                            final_type = word
 
-                    desc_str = " ".join(final_desc_parts).strip()
+                        # Skip numeric tokens that look like Invoice/Ref numbers (3-8 digits)
+                        if word.isdigit() and 3 <= len(word) <= 8:
+                            continue
+                            
+                        final_words.append(word)
+
+                    desc_str = " ".join(final_words).strip()
+                    
                     data_rows[tid]["transactions"].append({
                         "date": m_txn.group(1), 
+                        "time": m_txn.group(2) or "",
                         "post_date": m_txn.group(3), 
                         "desc": desc_str, 
-                        "branch": final_branch.strip(), 
+                        "branch": "", # Merged into desc already
                         "type": final_type, 
                         "amount": amount
                     })

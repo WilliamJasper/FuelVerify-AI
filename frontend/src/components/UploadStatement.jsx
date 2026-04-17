@@ -35,7 +35,6 @@ const UploadStatement = ({
                     accept=".pdf,application/pdf"
                     className="hidden"
                     onChange={onFileChange}
-                    multiple={isBBL}
                 />
 
                 <div
@@ -66,7 +65,7 @@ const UploadStatement = ({
                         ลากไฟล์มาวาง หรือ <span className={`text-${primaryColor}-600 underline`}>คลิกเพื่อเลือกไฟล์</span>
                     </p>
                     <p className="text-slate-400 text-sm font-medium">
-                        รองรับไฟล์ PDF {isBBL ? '(สามารถเลือกได้หลายไฟล์)' : '(ขนาดไม่เกิน 20MB)'}
+                        รองรับไฟล์ PDF (ขนาดไม่เกิน 20MB)
                     </p>
                 </div>
 

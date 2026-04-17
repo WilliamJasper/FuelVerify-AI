@@ -58,22 +58,6 @@ const SlipPreview = ({ slipResult, slipPage, setSlipPage, result, onRemovePage, 
     if (amtMatch === false || !effectiveValues?.amount) issueFields.push('ยอดเงิน');
     if (!hasTxn) issueFields.push('หมายเลขบัตร');
 
-    useEffect(() => {
-        // ออโต้โฟกัสไปยังรายการถ้า Match ได้คะแนนสูง (ร้านตรง วันที่ตรง ยอดตรง)
-        const score = matchedTxn?._score || 0;
-        if (hasTxn && (score >= 8 || (dateMatch && amtMatch && merchantMatch && last4Match))) {
-            const label = matchedCard?.account_name;
-            const m = String(label || '').match(/\d+/);
-            const vip_val = m ? parseInt(m[0], 10) : Number.NaN;
-            
-            const timer = setTimeout(() => {
-                window.dispatchEvent(
-                    new CustomEvent('fuelverify:focus-txn', { detail: { label, vip: vip_val, txnIndex: matchedTxnIndex } }),
-                );
-            }, 600);
-            return () => clearTimeout(timer);
-        }
-    }, [slipPage, hasTxn, dateMatch, amtMatch, merchantMatch, last4Match, matchedCard, matchedTxnIndex, matchedTxn?._score]);
 
     return (
         <div className="mt-10">

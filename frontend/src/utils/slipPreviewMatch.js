@@ -1,6 +1,7 @@
 import { 
   normalizeAmount, 
   normalizeDate, 
+  normalizeTime,
   extractMerchantKeywords, 
   last4FromCardNo 
 } from './matching.js';
@@ -12,6 +13,7 @@ import {
 export function matchSlipToStatement(currentPage, result) {
   const pv = currentPage?.manualValues || currentPage?.correctedValues || currentPage?.values || {};
   const slipDate = normalizeDate(pv.date);
+  const slipTime = normalizeTime(pv.time);
   const slipAmount = normalizeAmount(pv.amount);
   const slipMerchant = pv.merchant || '';
   const slipLast4 = pv.last4 ? String(pv.last4).trim() : '';
@@ -38,21 +40,24 @@ export function matchSlipToStatement(currentPage, result) {
       (card.transactions || []).forEach((txn, tIdx) => {
         if (txn.type === 'ชำระเงิน' || txn.type === 'INTEREST') return;
         
-        const txnDate = normalizeDate(txn.date);
+        const txnDate = normalizeDate(txn.trans_date || txn.date);
+        const txnTime = normalizeTime(txn.time);
         const txnAmt = normalizeAmount(txn.amount);
         const descUpper = (txn.desc || '').toUpperCase();
         
         const dateOk = !!slipDate && !!txnDate && slipDate === txnDate;
+        const timeOk = !!slipTime && !!txnTime && slipTime === txnTime;
         const amtOk = !!slipAmount && !!txnAmt && slipAmount === txnAmt;
         const merchOk = hasKeywords && merchantKeywords.some(kw => descUpper.includes(kw));
 
-        // ลำดับความสำคัญ
+        // ลำดับความสำคัญใหม่: เน้น เวลา + วันที่ + ยอดเงิน
         let score = 0;
-        if (dateOk && amtOk && merchOk && isL4Match) score = 10;
-        else if (dateOk && amtOk && merchOk) score = 8; // ร้านตรง + วันที่ตรง + ยอดตรง (น้ำหนักสูงตามลูกค้าร้องขอ)
+        if (timeOk && dateOk && amtOk && isL4Match) score = 15;
+        else if (timeOk && dateOk && amtOk) score = 12;
+        else if (dateOk && amtOk && merchOk && isL4Match) score = 10;
+        else if (dateOk && amtOk && merchOk) score = 8;
         else if (dateOk && amtOk && isL4Match) score = 6;
         else if (dateOk && merchOk && isL4Match) score = 5;
-        // กรณี amount หาย หรืออ่านไม่ออก
         else if (dateOk && merchOk && !slipAmount) score = 4;
 
         if (score > 0 && (!matchedTxn || score > (matchedTxn._score || 0))) {
@@ -69,7 +74,8 @@ export function matchSlipToStatement(currentPage, result) {
   const hasCard = !!matchedCard;
   const hasTxn = !!matchedTxn;
 
-  const dateMatch = hasTxn ? normalizeDate(matchedTxn.date) === slipDate : null;
+  const dateMatch = hasTxn ? normalizeDate(matchedTxn.trans_date || matchedTxn.date) === slipDate : null;
+  const timeMatch = hasTxn ? normalizeTime(matchedTxn.time) === slipTime : null;
   const amtMatch = hasTxn ? normalizeAmount(matchedTxn.amount) === slipAmount : null;
   
   const txnDesc = hasTxn ? (matchedTxn.desc || '').toUpperCase() : '';
@@ -90,6 +96,7 @@ export function matchSlipToStatement(currentPage, result) {
     hasCard,
     hasTxn,
     dateMatch,
+    timeMatch,
     amtMatch,
     merchantMatch,
     last4Match,

@@ -54,22 +54,13 @@ const UploadStatementPageBBL = () => {
 
     const handleFileChange = (e) => {
         if (e.target.files?.length > 0) {
-            const incoming = Array.from(e.target.files);
-            setFile((prev) => {
-                const existing = Array.isArray(prev) ? prev : prev ? [prev] : [];
-                return [...existing, ...incoming];
-            });
+            setFile(e.target.files[0]);
             setError(null);
         }
     };
 
-    const handleClearFile = (index) => {
-        if (index !== undefined && Array.isArray(file)) {
-            const next = file.filter((_, i) => i !== index);
-            setFile(next.length > 0 ? next : null);
-        } else {
-            setFile(null);
-        }
+    const handleClearFile = () => {
+        setFile(null);
         setError(null);
         if (fileInputRef.current) {
             fileInputRef.current.value = '';
@@ -77,8 +68,7 @@ const UploadStatementPageBBL = () => {
     };
 
     const handleUpload = async () => {
-        if (!file || (Array.isArray(file) && file.length === 0) || !id) return;
-        
+        if (!file || !id) return;
         setLoading(true);
         setLoadingProgress(0);
         setLoadingStep(1);
@@ -91,7 +81,7 @@ const UploadStatementPageBBL = () => {
             }
             abortControllerRef.current = new AbortController();
 
-            // Run progress concurrently but simpler
+            // Run progress concurrently
             const progressPromise = runFakeProgress(
                 setLoadingStep,
                 setLoadingProgress,
@@ -104,7 +94,6 @@ const UploadStatementPageBBL = () => {
             
             await updateRecordStatement(id, result);
             
-            // Ensure progress finishes or jumps to end
             setLoadingProgress(100);
             setLoadingStep(4);
             
@@ -113,7 +102,7 @@ const UploadStatementPageBBL = () => {
                 navigate(`/dashboard/bbl/${id}`);
             }, 800);
         } catch (err) {
-            console.error("Upload error:", err);
+            console.error("BBL Upload error:", err);
             if (!isCancelledRef.current) {
                 setError(
                     err.response?.data?.detail ||
@@ -147,11 +136,7 @@ const UploadStatementPageBBL = () => {
         e.stopPropagation();
         setIsDragActive(false);
         if (e.dataTransfer?.files?.length > 0) {
-            const incoming = Array.from(e.dataTransfer.files);
-            setFile((prev) => {
-                const existing = Array.isArray(prev) ? prev : prev ? [prev] : [];
-                return [...existing, ...incoming];
-            });
+            setFile(e.dataTransfer.files[0]);
             setError(null);
         }
     };
