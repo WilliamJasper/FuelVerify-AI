@@ -216,7 +216,19 @@ const TransactionTable = ({ card, txnMatchStatus, slipResult, localInvoices = {}
                                         <Eye className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
                                     </Link>
                                 ) : (
-                                    <span className="text-red-500 text-xs font-bold whitespace-nowrap">ขาดใบกำกับภาษี</span>
+                                    (() => {
+                                        const desc = (txn.desc || '').toUpperCase();
+                                        const isSkip = 
+                                            txn.type === 'ชำระเงิน' || 
+                                            txn.type === 'INTEREST' || 
+                                            desc.includes('ชำระเงินคืน') || 
+                                            desc.includes('AUTOPAYMENT - THANK YOU') || 
+                                            desc.includes('INTEREST CHARGE');
+                                        
+                                        if (isSkip) return <span className="text-slate-300 text-xs">—</span>;
+                                        
+                                        return <span className="text-red-500 text-xs font-bold whitespace-nowrap">ขาดใบกำกับภาษี</span>;
+                                    })()
                                 )}
                             </td>
                         </tr>
