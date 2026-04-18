@@ -41,6 +41,7 @@ const DashboardBBL = () => {
     const slipUploadStartRef = useRef(null);
     const [isSlipDragActive, setIsSlipDragActive] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [localInvoices, setLocalInvoices] = useState({});
 
     useEffect(() => {
         const loadData = async () => {
@@ -51,6 +52,17 @@ const DashboardBBL = () => {
                 if (!full) {
                     navigate('/', { replace: true });
                     return;
+                }
+
+                // ดึงข้อมูลใบกำกับภาษีสำหรับ Record นี้
+                try {
+                    const invRes = await fetch(`http://127.0.0.1:5004/api/invoices/${id}`);
+                    if (invRes.ok) {
+                        const invData = await invRes.json();
+                        setLocalInvoices(invData);
+                    }
+                } catch (invErr) {
+                    console.error('Failed to fetch invoices:', invErr);
                 }
                 
                 // Reset states for new record
@@ -394,8 +406,6 @@ const DashboardBBL = () => {
             return acc + val;
         }, 0) ?? 0);
 
-    console.log("Dashboard BBL State:", { record, result, totalAmount });
-
     const totalTransactions =
         result?.data?.reduce((acc, curr) => acc + (curr.transaction_count || 0), 0) ?? 0;
 
@@ -450,7 +460,13 @@ const DashboardBBL = () => {
                     onManualSlipEdit={handleManualSlipEdit}
                 />
 
-                <CardList result={result} slipResult={slipResult} bank="bbl" />
+                <CardList 
+                    result={result} 
+                    slipResult={slipResult} 
+                    bank="bbl" 
+                    localInvoices={localInvoices}
+                    recordId={id}
+                />
 
                 <SummarySection result={result} slipResult={slipResult} bank="bbl" />
             </main>

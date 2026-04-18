@@ -94,9 +94,9 @@ def init_db():
     except sqlite3.OperationalError:
         pass # คอลัมน์มีอยู่แล้ว
         
-    # ตารางเก็บรูปภาพและผล OCR แบบละเอียด (แทน IndexedDB)
-    c.execute('''CREATE TABLE IF NOT EXISTS slip_blobs
-                 (id TEXT PRIMARY KEY, data TEXT)''')
+    # ตารางเก็บรูปภาพใบกำกับภาษี (Persistent)
+    c.execute('''CREATE TABLE IF NOT EXISTS slip_invoices
+                 (record_id TEXT, page_index INTEGER, filename TEXT, file_data TEXT, PRIMARY KEY (record_id, page_index))''')
     conn.commit()
     conn.close()
 
@@ -1677,6 +1677,12 @@ def get_record_detail(id: str):
     record = json.loads(r["data"])
     c.execute("SELECT data FROM slip_blobs WHERE id = ?", (id,)); sb = c.fetchone()
     if sb: record["slipResult"] = json.loads(sb["data"])
+    
+    # ดึงข้อมูลใบกำกับภาษีที่แนบไว้
+    c.execute("SELECT page_index, filename FROM slip_invoices WHERE record_id = ?", (id,))
+    inv_rows = c.fetchall()
+    record["invoices"] = {r["page_index"]: r["filename"] for r in inv_rows}
+    
     conn.close(); return record
 
 @app.post("/api/records")
@@ -1691,6 +1697,57 @@ async def save_record(record: dict):
 @app.delete("/api/records/{id}")
 def delete_record(id: str):
     conn = sqlite3.connect(DB_PATH); c = conn.cursor(); c.execute("UPDATE records SET hidden = 1 WHERE id = ?", (id,)); conn.commit(); conn.close(); return {"status": "hidden"}
+
+# --- Invoice Attachments API ---
+@app.post("/api/invoices/{record_id}/{page_index}")
+async def upload_invoice(record_id: str, page_index: int, file: UploadFile = File(...)):
+    try:
+        content = await file.read()
+        encoded = base64.b64encode(content).decode('utf-8')
+        conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO slip_invoices (record_id, page_index, filename, file_data) VALUES (?, ?, ?, ?)",
+                  (record_id, page_index, file.filename, encoded))
+        conn.commit(); conn.close()
+        return {"status": "success", "filename": file.filename}
+    except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/invoices/{record_id}/{page_index}")
+def delete_invoice(record_id: str, page_index: int):
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    c.execute("DELETE FROM slip_invoices WHERE record_id = ? AND page_index = ?", (record_id, page_index))
+    conn.commit(); conn.close()
+    return {"status": "deleted"}
+
+@app.get("/api/invoices/{record_id}")
+def get_all_invoices_for_record(record_id: str):
+    conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row; c = conn.cursor()
+    c.execute("SELECT page_index, filename FROM slip_invoices WHERE record_id = ?", (record_id,))
+    rows = c.fetchall()
+    conn.close()
+    return {r["page_index"]: r["filename"] for r in rows}
+
+@app.get("/api/invoices/{record_id}/{page_index}/data")
+def get_invoice_data(record_id: str, page_index: int):
+    conn = sqlite3.connect(DB_PATH); c = conn.cursor()
+    # ใช้การค้นหาที่ยืดหยุ่นขึ้นเพื่อป้องกันปัญหา Type mismatch
+    c.execute("SELECT filename, file_data FROM slip_invoices WHERE record_id = ? AND (page_index = ? OR page_index = ?)", 
+              (record_id, page_index, str(page_index)))
+    r = c.fetchone()
+    conn.close()
+    
+    if not r:
+        print(f"DEBUG: Invoice not found for ID={record_id}, Page={page_index}")
+        raise HTTPException(status_code=404, detail="Invoice data not found")
+    
+    filename, file_data = r[0], r[1]
+    
+    # ถ้าข้อมูลใน DB ไม่มี Prefix ให้เติมให้ตามนามสกุลไฟล์
+    if not file_data.startswith("data:"):
+        ext = filename.split('.')[-1].lower()
+        mime = "application/pdf" if ext == "pdf" else f"image/{ext if ext != 'jpg' else 'jpeg'}"
+        file_data = f"data:{mime};base64,{file_data}"
+        
+    return {"filename": filename, "data": file_data}
 
 if __name__ == "__main__":
     import uvicorn

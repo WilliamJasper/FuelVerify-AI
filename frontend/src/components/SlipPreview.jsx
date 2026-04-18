@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { ChevronLeft, ChevronRight, Trash2, Pencil, Save, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, Trash2, Pencil, Save, X, FileCheck2, Plus, ChevronDown, ChevronUp, Eye } from 'lucide-react';
 import { matchSlipToStatement } from '../utils/slipPreviewMatch.js';
 
 const SlipPreview = ({ slipResult, slipPage, setSlipPage, result, onRemovePage, onRemoveAllPages, onManualEdit }) => {
+    const navigate = useNavigate();
     if (!slipResult?.pages?.length) return null;
 
     const currentPage = slipResult.pages[slipPage] || slipResult.pages[0];
@@ -59,44 +61,227 @@ const SlipPreview = ({ slipResult, slipPage, setSlipPage, result, onRemovePage, 
     if (!hasTxn) issueFields.push('หมายเลขบัตร');
 
 
+    const [navStart, setNavStart] = useState(0);
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [localInvoices, setLocalInvoices] = useState({});
+    const [showMissingAlert, setShowMissingAlert] = useState(true);
+
+    // ดึงข้อมูลใบกำกับภาษีจาก SQLite ทุกครั้งที่ ID เปลี่ยน หรือ รีเฟรชหน้า
+    useEffect(() => {
+        const fetchInvoices = async () => {
+            let recordId = result?.id;
+            if (!recordId) {
+                const urlParts = window.location.pathname.split('/');
+                recordId = urlParts[urlParts.length - 1];
+            }
+
+            if (!recordId || recordId === 'dashboard') return;
+
+            try {
+                const res = await fetch(`http://127.0.0.1:5004/api/invoices/${recordId}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    setLocalInvoices(data);
+                }
+            } catch (err) {
+                console.error('Failed to fetch invoices:', err);
+            }
+        };
+
+        fetchInvoices();
+    }, [result, slipPage]); // ทำงานเมื่อสลับหน้าหรือผลลัพธ์เปลี่ยน
+
+    // ฟังก์ชันอัปโหลดไฟล์ไปยัง Backend
+    const handleFileUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        // ดึง ID จาก result หรือจาก URL (fallback)
+        let recordId = result?.id;
+        if (!recordId) {
+            const urlParts = window.location.pathname.split('/');
+            recordId = urlParts[urlParts.length - 1]; // เลข ID ตัวสุดท้ายใน URL
+        }
+
+        if (!recordId || recordId === 'dashboard') {
+            alert('ไม่สามารถระบุ ID รายการได้ (กรุณารอสักครู่หรือลองรีเฟรชหน้าจอ)');
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        try {
+            const res = await fetch(`http://127.0.0.1:5004/api/invoices/${recordId}/${slipPage}`, {
+                method: 'POST',
+                body: formData,
+            });
+            const data = await res.json();
+            if (data.status === 'success') {
+                setLocalInvoices(prev => ({ ...prev, [slipPage]: data.filename }));
+                e.target.value = '';
+            } else {
+                alert('เกิดข้อผิดพลาด: ' + (data.detail || 'ไม่ทราบสาเหตุ'));
+            }
+        } catch (err) {
+            console.error('Upload failed:', err);
+            alert('เชื่อมต่อ Backend ไม่สำเร็จ (Port 5004)');
+        }
+    };
+
+    // ฟังก์ชันลบไฟล์ออกจาก Backend
+    const handleFileDelete = async () => {
+        let recordId = result?.id;
+        if (!recordId) {
+            const urlParts = window.location.pathname.split('/');
+            recordId = urlParts[urlParts.length - 1];
+        }
+
+        if (!recordId || !window.confirm('ต้องการลบไฟล์ใบกำกับภาษีนี้ใช่หรือไม่?')) return;
+
+        try {
+            await fetch(`http://127.0.0.1:5004/api/invoices/${recordId}/${slipPage}`, {
+                method: 'DELETE',
+            });
+            setLocalInvoices(prev => {
+                const next = { ...prev };
+                delete next[slipPage];
+                return next;
+            });
+        } catch (err) {
+            console.error('Delete failed:', err);
+        }
+    };
+
+    // ฟังก์ชันเปิดดูรูปใบกำกับภาษี (เปลี่ยนเป็นย้ายหน้าไปหน้า Tax Invoice)
+    const handleViewInvoice = () => {
+        let recordId = result?.id;
+        if (!recordId) {
+            const urlParts = window.location.pathname.split('/');
+            recordId = urlParts[urlParts.length - 1];
+        }
+        if (!recordId) return;
+        navigate(`/tax-invoice/${recordId}/${slipPage}`);
+    };
+
+    // แก้บัค Navigation: ปรับช่วงหน้าให้ขยับทีละ 20 หน้า (Step-based)
+    useEffect(() => {
+        const currentStep = Math.floor(slipPage / 20) * 20;
+        if (navStart !== currentStep) {
+            setNavStart(currentStep);
+        }
+    }, [slipPage, navStart]);
+
+    // คำนวณหน้าที่จะแสดงผล
+    const visiblePages = isExpanded 
+        ? Array.from({ length: totalPages }, (_, i) => i) // แสดงทั้งหมด
+        : Array.from({ length: Math.min(20, totalPages - navStart) }, (_, i) => navStart + i); // แสดงช่วงละ 20
+
+    const currentInvoiceName = localInvoices[slipPage];
+
+    // คำนวณหาเลขหน้าที่ยังไม่ได้แนบใบกำกับภาษี
+    const missingInvoicePages = Array.from({ length: totalPages }, (_, i) => i)
+        .filter(pageIdx => !localInvoices[pageIdx]);
+
     return (
-        <div className="mt-10">
-            {totalPages > 1 && (
-                <div className="flex flex-wrap items-center justify-center gap-4 mb-6">
-                    <button
-                        onClick={() => setSlipPage(Math.max(0, slipPage - 1))}
-                        disabled={slipPage === 0}
-                        className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-                    >
-                        <ChevronLeft className="w-5 h-5 text-slate-600" />
-                    </button>
-                    <div className="flex items-center gap-2">
-                        {Array.from({ length: totalPages }, (_, i) => (
-                            <button
-                                key={i}
-                                onClick={() => setSlipPage(i)}
-                                className={`w-10 h-10 rounded-xl font-bold text-sm transition-all ${
-                                    slipPage === i
-                                        ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-200'
-                                        : 'bg-slate-100 text-slate-500 hover:bg-slate-200'
-                                }`}
-                            >
-                                {i + 1}
-                            </button>
-                        ))}
+        <div className="mt-8 space-y-6">
+            {/* แจ้งเตือนหน้าที่ยังไม่แนบใบกำกับภาษี (โครงสร้างตามแบบสีส้ม) */}
+            {missingInvoicePages.length > 0 && (
+                <div className="w-full animate-in slide-in-from-top duration-300">
+                    <div className="bg-rose-50 border border-rose-200 rounded-[28px] overflow-hidden shadow-sm">
+                        <button 
+                            onClick={() => setShowMissingAlert(!showMissingAlert)}
+                            className="w-full flex items-center justify-between p-5 hover:bg-rose-100/50 transition-colors border-b border-rose-100"
+                        >
+                            <div className="flex items-center gap-4">
+                                <div className="p-2.5 rounded-2xl bg-rose-600 text-white shadow-md shadow-rose-200">
+                                    <X size={20} strokeWidth={3} />
+                                </div>
+                                <div className="text-left">
+                                    <p className="text-rose-950 font-black text-lg">พบหน้าที่ยังไม่ได้แนบรูปใบกำกับภาษี <span className="bg-rose-600 text-white px-2.5 py-0.5 rounded-lg ml-1 text-sm">{missingInvoicePages.length} หน้า</span></p>
+                                    <p className="text-rose-600/70 text-xs font-bold uppercase tracking-wider">กดเพื่อดูหน้าทั้งหมดในพรีวิว</p>
+                                </div>
+                            </div>
+                            <div className="p-2 rounded-xl bg-white border border-rose-100 text-rose-600 shadow-sm">
+                                {showMissingAlert ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                            </div>
+                        </button>
+                        
+                        {showMissingAlert && (
+                            <div className="p-2 animate-in fade-in slide-in-from-top-2 duration-300">
+                                <div className="flex flex-col gap-1.5">
+                                    {missingInvoicePages.map((pageIdx) => (
+                                        <button 
+                                            key={pageIdx}
+                                            onClick={() => setSlipPage(pageIdx)}
+                                            className="group flex items-center justify-between px-5 py-3.5 bg-white border border-rose-100 rounded-2xl hover:bg-rose-600 hover:border-rose-600 transition-all active:scale-[0.99] shadow-sm"
+                                        >
+                                            <span className="text-rose-900 font-black text-base group-hover:text-white transition-colors">
+                                                หน้า {pageIdx + 1}
+                                            </span>
+                                            <span className="px-3 py-1 bg-rose-100 text-rose-700 rounded-lg text-[13px] font-black group-hover:bg-rose-500 group-hover:text-white transition-all">
+                                                ยังไม่แนบรูปใบกำกับภาษี
+                                            </span>
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
-                    <button
-                        onClick={() => setSlipPage(Math.min(totalPages - 1, slipPage + 1))}
-                        disabled={slipPage === totalPages - 1}
-                        className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-                    >
-                        <ChevronRight className="w-5 h-5 text-slate-600" />
-                    </button>
-                    <span className="text-slate-600 text-sm font-bold">
-                        หน้า {slipPage + 1} / {totalPages}
-                    </span>
                 </div>
             )}
+            {totalPages > 1 && (
+                <div className="flex flex-col items-center gap-2 mb-8 w-full">
+                    {/* ตัวบอกหน้าย้ายมาด้านบนกึ่งกลาง */}
+                    <span className="text-slate-600 text-[13px] font-black bg-white px-4 py-1.5 rounded-full border border-slate-200 shadow-sm shrink-0 whitespace-nowrap">
+                        หน้า {slipPage + 1} / {totalPages}
+                    </span>
+
+                    <div className={`flex items-start justify-center gap-3 bg-white/50 p-3 rounded-[32px] border border-slate-100 shadow-sm w-fit mx-auto transition-all duration-300 ${isExpanded ? 'max-w-7xl' : ''}`}>
+                        <button
+                            onClick={() => setSlipPage(Math.max(0, slipPage - 1))}
+                            disabled={slipPage === 0}
+                            className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition-all shrink-0 shadow-sm"
+                        >
+                            <ChevronLeft className="w-5 h-5 text-slate-600" />
+                        </button>
+                        
+                        <div className={`flex flex-wrap items-center justify-center gap-1.5 px-1 ${isExpanded ? 'flex-1' : ''}`}>
+                            {visiblePages.map((i) => (
+                                <button
+                                    key={i}
+                                    onClick={() => setSlipPage(i)}
+                                    className={`w-9 h-9 rounded-xl font-bold text-sm transition-all flex items-center justify-center shrink-0 border ${
+                                        slipPage === i
+                                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-md shadow-emerald-100'
+                                            : 'bg-white border-slate-200 text-slate-500 hover:border-emerald-200 hover:text-emerald-600'
+                                    }`}
+                                >
+                                    {i + 1}
+                                </button>
+                            ))}
+                            
+                            {totalPages > 20 && (
+                                <button
+                                    onClick={() => setIsExpanded(!isExpanded)}
+                                    className="px-4 py-2 font-black text-xs uppercase tracking-widest text-blue-600 hover:bg-blue-50 rounded-xl transition-all shrink-0 ml-1 border border-blue-100 bg-white"
+                                >
+                                    {isExpanded ? 'Show less' : 'Show more'}
+                                </button>
+                            )}
+                        </div>
+
+                        <button
+                            onClick={() => setSlipPage(Math.min(totalPages - 1, slipPage + 1))}
+                            disabled={slipPage === totalPages - 1}
+                            className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition-all shrink-0 shadow-sm"
+                        >
+                            <ChevronRight className="w-5 h-5 text-slate-600" />
+                        </button>
+                    </div>
+                </div>
+            )}
+
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 <div className="bg-slate-50 border border-slate-200 rounded-[28px] p-6">
@@ -279,6 +464,50 @@ const SlipPreview = ({ slipResult, slipPage, setSlipPage, result, onRemovePage, 
                             >
                                 {hasCard ? matchedCard.account_name : slipLast4 || inferredLast4FromCard ? 'ไม่พบรายการ' : '-'}
                             </span>
+                        </div>
+                        
+                        {/* ส่วนแนบรูปภาพใบกำกับภาษีเพิ่มเติม (PERSISTENT & PREMIUM UI) */}
+                        <div className="flex justify-between gap-4 items-center py-4 px-4 bg-slate-50/80 border-t border-slate-200">
+                            <span className="text-slate-700 font-bold text-lg shrink-0">รูปภาพใบกำกับภาษี</span>
+                            <div className="flex items-center gap-2">
+                                {!currentInvoiceName ? (
+                                    <label className="cursor-pointer group flex items-center gap-2 bg-white border-2 border-blue-100 px-4 py-2.5 rounded-2xl text-blue-600 font-black text-sm hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all shadow-sm active:scale-95">
+                                        <Plus size={18} />
+                                        <span>เลือกไฟล์</span>
+                                        <input 
+                                            type="file" 
+                                            className="hidden" 
+                                            accept=".png,.jpg,.jpeg,.pdf"
+                                            onChange={handleFileUpload}
+                                        />
+                                    </label>
+                                ) : (
+                                    <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 pl-3 pr-2 py-2 rounded-2xl animate-in fade-in zoom-in duration-300">
+                                        <div className="w-8 h-8 rounded-lg bg-emerald-500 flex items-center justify-center text-white shrink-0 shadow-sm">
+                                            <FileCheck2 size={16} />
+                                        </div>
+                                        <span className="text-sm font-black text-emerald-800 max-w-[120px] truncate" title={currentInvoiceName}>
+                                            {currentInvoiceName}
+                                        </span>
+                                        <div className="flex items-center gap-1 border-l border-emerald-200 ml-1 pl-1">
+                                            <button 
+                                                onClick={handleViewInvoice}
+                                                className="p-1.5 rounded-lg text-emerald-600 hover:text-emerald-800 hover:bg-emerald-100 transition-all"
+                                                title="เปิดดูรูป"
+                                            >
+                                                <Eye size={16} />
+                                            </button>
+                                            <button 
+                                                onClick={handleFileDelete}
+                                                className="p-1.5 rounded-lg text-emerald-400 hover:text-red-500 hover:bg-red-50 transition-all"
+                                                title="ลบไฟล์"
+                                            >
+                                                <X size={16} />
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                         {hasCard && (
                             <button

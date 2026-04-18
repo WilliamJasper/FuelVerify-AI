@@ -20,14 +20,15 @@ function computeTxnMatchStatus(card, slipResult, globalUsedSlipIndices) {
 
         if (matchIdx !== -1) {
             globalUsedSlipIndices.add(matchIdx);
-            txnMatchStatus.set(tIdx, true);
+            txnMatchStatus.set(tIdx, matchIdx); // เก็บ Index สลิปที่คู่กัน
         } else {
-            txnMatchStatus.set(tIdx, false);
+            txnMatchStatus.set(tIdx, -1); // -1 คือไม่มีคู่
         }
     });
 
     return txnMatchStatus;
 }
+
 
 /** หา index ใน baseCards จาก label สรุป (ชื่อบัตร / VIP / เลข 4 ตัวท้าย) */
 function findCardIndexInBase(baseCards, label, vip) {
@@ -85,7 +86,7 @@ function scrollCardHeaderIntoView(card, anchorIdFor) {
     });
 }
 
-const CardList = ({ result, slipResult, bank = 'kbank' }) => {
+const CardList = ({ result, slipResult, bank = 'kbank', localInvoices = {}, recordId }) => {
     const [expandedCards, setExpandedCards] = useState(() => new Set());
     const [searchQuery, setSearchQuery] = useState('');
     const [open, setOpen] = useState(true);
@@ -212,11 +213,11 @@ const CardList = ({ result, slipResult, bank = 'kbank' }) => {
                             <div className="flex items-center gap-2">
                                 <CreditCard className="w-5 h-5 text-amber-500" />
                                 <h3 className="text-xl font-black text-slate-900">
-                                    รายละเอียดแยกตามลำดับบัตร
+                                    {bank === 'kbank' ? 'รายละเอียดแยกตาม VIP' : 'รายละเอียดแยกตามลำดับบัตร'}
                                 </h3>
                             </div>
                             <p className="text-sm text-slate-600 mt-1">
-                                ดูรายละเอียดและผลการจับคู่รายบัตร
+                                {bank === 'kbank' ? 'ดูรายละเอียดและผลการจับคู่ราย VIP' : 'ดูรายละเอียดและผลการจับคู่รายบัตร'}
                             </p>
                         </div>
                         <button
@@ -235,7 +236,7 @@ const CardList = ({ result, slipResult, bank = 'kbank' }) => {
                                 type="text"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                placeholder="ค้นหาชื่อบัตร หรือเลข 4 ตัวท้าย..."
+                                placeholder={bank === 'kbank' ? "ค้นหาชื่อ VIP หรือเลข 4 ตัวท้าย..." : "ค้นหาชื่อบัตร หรือเลข 4 ตัวท้าย..."}
                                 className="w-full pl-9 pr-3 py-2.5 rounded-2xl border border-slate-200 text-base text-slate-900 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500 bg-white shadow-sm"
                             />
                         </div>
@@ -249,7 +250,9 @@ const CardList = ({ result, slipResult, bank = 'kbank' }) => {
                     <div className="w-16 h-16 rounded-full bg-slate-50 flex items-center justify-center mx-auto mb-4 text-slate-300">
                         <CreditCard size={32} />
                     </div>
-                    <p className="text-slate-500 font-medium italic">ยังไม่พบข้อมูลแยกตามลำดับบัตร กรุณาอัปโหลดใบแจ้งยอด</p>
+                    <p className="text-slate-500 font-medium italic">
+                        {bank === 'kbank' ? 'ยังไม่พบข้อมูลแยกตาม VIP กรุณาอัปโหลดใบแจ้งยอด' : 'ยังไม่พบข้อมูลแยกตามลำดับบัตร กรุณาอัปโหลดใบแจ้งยอด'}
+                    </p>
                 </div>
             )}
 
@@ -265,7 +268,7 @@ const CardList = ({ result, slipResult, bank = 'kbank' }) => {
 
             {result && filteredCards.length === 0 && (
                 <div className="px-4 py-10 text-center text-slate-600 text-base italic">
-                    ไม่พบบัตรที่ตรงกับคำค้นหา
+                    {bank === 'kbank' ? 'ไม่พบ VIP ที่ตรงกับคำค้นหา' : 'ไม่พบบัตรที่ตรงกับคำค้นหา'}
                 </div>
             )}
 
@@ -293,12 +296,15 @@ const CardList = ({ result, slipResult, bank = 'kbank' }) => {
                             className="scroll-mt-28 p-8 flex justify-between items-center cursor-pointer group active:scale-[0.99] transition-transform duration-300"
                         >
                             <div className="flex items-center gap-8">
-                                <div className="w-16 h-16 bg-gradient-to-br from-amber-300 to-orange-400 rounded-2xl flex items-center justify-center font-black text-white text-2xl shadow-[0_8px_20px_rgb(251,191,36,0.4)] group-hover:scale-105 group-hover:shadow-[0_12px_25px_rgb(251,191,36,0.6)] group-hover:-rotate-3 transition-all duration-500">
-                                    {item.card_id}
+                                <div className="w-16 h-16 bg-gradient-to-br from-amber-300 to-orange-400 rounded-2xl flex flex-col items-center justify-center font-black text-white shadow-[0_8px_20px_rgb(251,191,36,0.4)] group-hover:scale-105 group-hover:shadow-[0_12px_25px_rgb(251,191,36,0.6)] group-hover:-rotate-3 transition-all duration-500">
+                                    <span className="text-2xl">{item.card_id}</span>
                                 </div>
                                 <div>
                                     <h4 className="text-2xl font-black text-slate-900 uppercase tracking-tight mb-1 group-hover:text-blue-600 transition-colors">
-                                        {bank === 'bbl' ? item.card_no : item.account_name}
+                                        {bank === 'bbl' 
+                                          ? item.card_no 
+                                          : (String(item.account_name || '').replace('หมายเลขบัตร', 'VIP'))
+                                        }
                                     </h4>
                                     <p className="text-slate-600 font-mono text-sm tracking-widest">
                                         {bank === 'bbl' ? item.account_name : item.card_no}
@@ -345,6 +351,8 @@ const CardList = ({ result, slipResult, bank = 'kbank' }) => {
                                 txnMatchStatus={txnMatchStatus}
                                 slipResult={slipResult}
                                 bank={bank}
+                                localInvoices={localInvoices}
+                                recordId={recordId}
                             />
                         </div>
                     </div>

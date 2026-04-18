@@ -42,6 +42,7 @@ const DashboardKBANK = () => {
     const slipUploadStartRef = useRef(null);
     const [isSlipDragActive, setIsSlipDragActive] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [localInvoices, setLocalInvoices] = useState({});
 
     useEffect(() => {
         const loadData = async () => {
@@ -52,6 +53,17 @@ const DashboardKBANK = () => {
                 if (!full) {
                     navigate('/', { replace: true });
                     return;
+                }
+
+                // ดึงข้อมูลใบกำกับภาษีสำหรับ Record นี้
+                try {
+                    const invRes = await fetch(`http://127.0.0.1:5004/api/invoices/${id}`);
+                    if (invRes.ok) {
+                        const invData = await invRes.json();
+                        setLocalInvoices(invData);
+                    }
+                } catch (invErr) {
+                    console.error('Failed to fetch invoices:', invErr);
                 }
                 
                 // Reset states for new record
@@ -452,7 +464,13 @@ const DashboardKBANK = () => {
                     onManualSlipEdit={handleManualSlipEdit}
                 />
 
-                <CardList result={result} slipResult={slipResult} />
+                <CardList 
+                    result={result} 
+                    slipResult={slipResult} 
+                    bank="kbank"
+                    localInvoices={localInvoices}
+                    recordId={id}
+                />
 
                 <SummarySection result={result} slipResult={slipResult} />
             </main>

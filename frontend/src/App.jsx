@@ -5,6 +5,7 @@ import UploadStatementPageKBANK from './pages/UploadStatementPageKBANK.jsx';
 import UploadStatementPageBBL from './pages/UploadStatementPageBBL.jsx';
 import DashboardKBANK from './pages/DashboardKBANK.jsx';
 import DashboardBBL from './pages/DashboardBBL.jsx';
+import TaxInvoicePage from './pages/TaxInvoicePage.jsx';
 
 const basename =
     (import.meta.env.BASE_URL || '/').replace(/\/$/, '') || undefined;
@@ -17,6 +18,7 @@ const App = () => (
             <Route path="/setup-statement/bbl/:id" element={<UploadStatementPageBBL />} />
             <Route path="/dashboard/kbank/:id" element={<DashboardKBANK />} />
             <Route path="/dashboard/bbl/:id" element={<DashboardBBL />} />
+            <Route path="/tax-invoice/:recordId/:pageIndex" element={<TaxInvoicePage />} />
         </Routes>
     </BrowserRouter>
 );

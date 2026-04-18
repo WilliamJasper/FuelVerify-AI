@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Upload, Plus, Loader2, AlertCircle, ChevronDown, Trash2, X, CheckCircle2 } from 'lucide-react';
+import { Upload, Plus, Loader2, AlertCircle, ChevronDown, Trash2, X, CheckCircle2, ChevronUp } from 'lucide-react';
 import SlipPreview from './SlipPreview.jsx';
 import { matchSlipToStatement } from '../utils/slipPreviewMatch.js';
 
@@ -31,6 +31,7 @@ const UploadSlip = ({
     onDismissSlipPreviewTime,
 }) => {
     const [open, setOpen] = useState(true);
+    const [showSuspiciousAlert, setShowSuspiciousAlert] = useState(true);
     const formatElapsed = (sec) => {
         const s = Number(sec || 0);
         if (!Number.isFinite(s) || s < 60) return `${Math.max(0, Math.floor(s))} วินาที`;
@@ -377,41 +378,50 @@ const UploadSlip = ({
         )}
 
         {suspiciousPages.length > 0 && (
-            <div className="mt-6 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900">
-                <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-start gap-3">
-                        <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                        <div>
-                            <p className="font-bold text-sm">พบหน้าที่น่าสงสัยจากการอ่านสลิป</p>
-                            <p className="text-xs text-amber-700 mt-0.5">กดเพื่อไปดูหน้าในพรีวิว</p>
-                        </div>
-                    </div>
-                    <span className="text-xs font-bold bg-white/70 border border-amber-200 px-2 py-1 rounded-full">
-                        {suspiciousPages.length} หน้า
-                    </span>
-                </div>
-
-                <div className="mt-3 flex flex-col gap-2">
-                    {suspiciousPages.map(({ pageIndex, reasons }) => (
-                        <button
-                            key={pageIndex}
-                            type="button"
-                            onClick={() => setSlipPage(pageIndex)}
-                            className="text-left p-3 rounded-xl border border-amber-200 bg-white/60 hover:bg-white transition-colors"
-                        >
-                            <div className="flex items-center justify-between gap-3">
-                                <span className="font-bold text-sm">หน้า {pageIndex + 1}</span>
-                                <span className="text-xs font-bold bg-amber-100 text-amber-900 px-2 py-1 rounded-full shrink-0">
-                                    {reasons[0]}
-                                </span>
+            <div className="mt-6 animate-in slide-in-from-top duration-300">
+                <div className="bg-amber-50 border border-amber-200 rounded-[28px] shadow-sm overflow-hidden">
+                    <button 
+                        onClick={() => setShowSuspiciousAlert(!showSuspiciousAlert)}
+                        className={`w-full flex items-start justify-between p-5 hover:bg-amber-100/50 transition-colors ${showSuspiciousAlert ? 'border-b border-amber-100' : ''}`}
+                    >
+                        <div className="flex items-center gap-4">
+                            <div className="p-2.5 rounded-2xl bg-amber-500 text-white shadow-md shadow-amber-200">
+                                <AlertCircle size={20} strokeWidth={3} />
                             </div>
-                            {reasons.length > 1 && (
-                                <div className="text-xs text-amber-700 mt-1">
-                                    +อีก {reasons.length - 1} เหตุผล
-                                </div>
-                            )}
-                        </button>
-                    ))}
+                            <div className="text-left">
+                                <p className="text-amber-950 font-black text-lg flex items-center gap-2">
+                                    พบหน้าที่น่าสงสัยจากการอ่านสลิป 
+                                    <span className="bg-amber-500 text-white px-2.5 py-0.5 rounded-lg text-sm">{suspiciousPages.length} หน้า</span>
+                                </p>
+                                <p className="text-amber-600/70 text-xs font-bold uppercase tracking-wider">กดเพื่อดูหน้าทั้งหมดในพรีวิว</p>
+                            </div>
+                        </div>
+                        <div className="p-2 rounded-xl bg-white border border-amber-100 text-amber-600 shadow-sm">
+                            {showSuspiciousAlert ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                        </div>
+                    </button>
+
+                    {showSuspiciousAlert && (
+                        <div className="p-2 animate-in fade-in slide-in-from-top-2 duration-300">
+                            <div className="flex flex-col gap-1.5">
+                                {suspiciousPages.map(({ pageIndex, reasons }) => (
+                                    <button
+                                        key={pageIndex}
+                                        type="button"
+                                        onClick={() => setSlipPage(pageIndex)}
+                                        className="group flex items-center justify-between px-5 py-3.5 bg-white border border-amber-100 rounded-2xl hover:bg-amber-600 hover:border-amber-600 transition-all active:scale-[0.99] shadow-sm text-left"
+                                    >
+                                        <span className="text-amber-900 font-black text-base group-hover:text-white transition-colors">
+                                            หน้า {pageIndex + 1}
+                                        </span>
+                                        <span className="px-3 py-1 bg-amber-100 text-amber-900 rounded-lg text-[13px] font-black group-hover:bg-amber-500 group-hover:text-white transition-all">
+                                            {reasons[0]}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         )}
